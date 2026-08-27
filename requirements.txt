@@ -1,0 +1,22 @@
+# --- Web / RPC ---
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+grpcio==1.68.1
+grpcio-tools==1.68.1
+
+# --- Config / validation ---
+pydantic==2.10.3
+pydantic-settings==2.6.1
+PyYAML==6.0.2
+
+# --- Detection (Phase 5 NER 전까지는 optional로 둬도 됨) ---
+# torch==2.5.1
+# transformers==4.46.3
+
+# --- Session store ---
+redis==5.2.1
+
+# --- Dev / test ---
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1
