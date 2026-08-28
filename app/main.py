@@ -14,6 +14,7 @@ import threading
 
 import uvicorn
 
+from . import db
 from .api import create_app
 from .config import load_config
 from .grpc_server import create_server
@@ -57,6 +58,7 @@ def main() -> None:
     api_server.should_exit = True
     grpc_server.stop(grace=2.0)
     api_thread.join(timeout=5.0)
+    db.close()
     logger.info("종료 완료")
 
 

@@ -8,6 +8,11 @@ session_ttl_sec: 1800     # 세션 컨텍스트 TTL (초)
 vault_ttl_sec: 1800       # 토큰 볼트 TTL (초) — 세션과 수명 분리
 log_path: log_events.jsonl  # 감사 로그 JSONL sink (DLP_LOG_PATH 로 오버라이드)
 
+db:
+  dsn: postgresql://dlp:dlp@localhost:5432/dlp  # DLP_DB_DSN 로 오버라이드
+  pool_min: 1
+  pool_max: 8
+
 purpose:
   backend: rule           # rule | llm
   llm_timeout_sec: 1.5

@@ -27,6 +27,12 @@ class RiskConfig(BaseModel):
     hard_block: float = 0.8  # 누적 위험도 임계값 — 초과 시 block
 
 
+class DbConfig(BaseModel):
+    dsn: str = "postgresql://dlp:dlp@localhost:5432/dlp"  # DLP_DB_DSN 로 오버라이드
+    pool_min: int = 1
+    pool_max: int = 8
+
+
 class GrpcConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 50051
@@ -45,6 +51,7 @@ class Config(BaseModel):
     vault_ttl_sec: int = 1800  # 토큰 볼트 TTL (세션과 수명 분리)
     log_path: str = "log_events.jsonl"  # 감사 로그 JSONL sink 경로
 
+    db: DbConfig = Field(default_factory=DbConfig)
     purpose: PurposeConfig = Field(default_factory=PurposeConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     grpc: GrpcConfig = Field(default_factory=GrpcConfig)
@@ -66,6 +73,8 @@ def load_config(path: str | Path | None = None) -> Config:
         cfg.grpc.port = int(os.environ["DLP_GRPC_PORT"])
     if os.environ.get("DLP_LOG_PATH"):
         cfg.log_path = os.environ["DLP_LOG_PATH"]
+    if os.environ.get("DLP_DB_DSN"):
+        cfg.db.dsn = os.environ["DLP_DB_DSN"]
 
     if cfg.fail_action not in ("block", "allow"):
         raise ValueError(f"fail_action 은 block|allow 여야 함: {cfg.fail_action!r}")
