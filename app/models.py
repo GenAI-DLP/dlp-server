@@ -72,6 +72,8 @@ class AnalysisContext:
     injection: InjectionVerdict = field(
         default_factory=lambda: InjectionVerdict(hit=False, score=0.0, pattern=None)
     )
+    blocked: bool = False
+    block_reason: dict | None = None  # guardrail_hits 한 조각 형태: {"type": "...", ...}
 
 
 @dataclass

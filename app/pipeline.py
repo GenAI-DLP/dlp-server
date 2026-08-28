@@ -8,8 +8,9 @@ gRPC 서버 · HTTP API · eval 스크립트가 모두 이 함수를 호출한�
     Stage = Callable[[AnalysisContext], AnalysisContext]
     각 스테이지는 ctx 를 받아 필드를 갱신해 반환한다. "차단" 신호는 별도 반환값이 아니라
     ctx 필드로 표현한다:
+      - ctx.blocked == True                      → block (ctx.block_reason 을 근거로 첨부)
       - ctx.injection.hit == True                → block
-      - ctx.risk_score >= cfg.risk.hard_block    → block
+      - ctx.risk_score >= cfg.risk.hard_block    → block (input 경로만)
     본문 변경은 ctx.turns[*].text 를 바꾸면 되고, 파이프라인이 adapter.rebuild 로 재조립한다.
 
 현재: 스테이지 목록이 비어 있어 실질 판정은 없다(항상 allow). 각 기능(a~h)이 자리에 stage 를 채운다.
@@ -120,7 +121,22 @@ def _emit_log(
 def _run_stages(ctx: AnalysisContext, stages: list[Stage]) -> AnalysisContext:
     for stage in stages:
         ctx = stage(ctx)
+        if ctx.blocked:  # 차단 확정 시 이후 스테이지 스킵
+            break
     return ctx
+
+
+def _block_check(ctx: AnalysisContext, cfg: Config, *, check_risk: bool) -> Decision | None:
+    """스테이지 실행 후 ctx 를 보고 block 여부를 판정. block 이 아니면 None."""
+    if ctx.blocked:
+        hits = [ctx.block_reason] if ctx.block_reason else []
+        return Decision(action="block", reason_obj=_reason(ctx, "block", guardrail_hits=hits))
+    if ctx.injection.hit:
+        hits = [{"type": "injection", "pattern": ctx.injection.pattern}]
+        return Decision(action="block", reason_obj=_reason(ctx, "block", guardrail_hits=hits))
+    if check_risk and ctx.risk_score >= cfg.risk.hard_block:
+        return Decision(action="block", reason_obj=_reason(ctx, "block", note="risk_hard_block"))
+    return None
 
 
 def _reason(ctx: AnalysisContext, verdict: str, **extra: object) -> dict:
@@ -157,11 +173,9 @@ def _analyze_input(
 
     ctx = _run_stages(ctx, _INPUT_STAGES)
 
-    if ctx.injection.hit:
-        hits = [{"type": "injection", "pattern": ctx.injection.pattern}]
-        return Decision(action="block", reason_obj=_reason(ctx, "block", guardrail_hits=hits))
-    if ctx.risk_score >= cfg.risk.hard_block:
-        return Decision(action="block", reason_obj=_reason(ctx, "block", note="risk_hard_block"))
+    blocked = _block_check(ctx, cfg, check_risk=True)
+    if blocked is not None:
+        return blocked
 
     # 스테이지가 turn 텍스트를 안 바꿨으면 원본 본문을 그대로 통과 (재직렬화로 인한 diff 방지)
     if [t.text for t in ctx.turns] == original_texts:
@@ -191,11 +205,10 @@ def _analyze_output(
 
     ctx = _run_stages(ctx, _OUTPUT_STAGES)
 
-    if ctx.injection.hit:
-        return Decision(
-            action="block",
-            reason_obj=_reason(ctx, "block", guardrail_hits=[{"type": "output_guard"}]),
-        )
+    # output 경로는 risk_score 를 누적하는 스테이지가 없어 check_risk=False
+    blocked = _block_check(ctx, cfg, check_risk=False)
+    if blocked is not None:
+        return blocked
 
     new_text = ctx.turns[0].text if ctx.turns else text
     if new_text == text:
