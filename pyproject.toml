@@ -2,6 +2,7 @@
 line-length = 100
 target-version = "py311"
 extend-exclude = ["app/proto"]   # protoc 생성물은 검사 제외
+force-exclude = true              # 명시적 경로(pre-commit 등)로 불려도 exclude 적용
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]  # pycodestyle, pyflakes, isort, pyupgrade, bugbear
