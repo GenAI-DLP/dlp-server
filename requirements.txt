@@ -20,6 +20,9 @@ redis==5.2.1
 psycopg[binary]==3.2.3
 psycopg-pool==3.2.4
 
+# --- Crypto (볼트 cipher_value AES-GCM) ---
+cryptography==50.0.1
+
 # --- Dev / test ---
 pytest==8.3.4
 pytest-asyncio==0.24.0
