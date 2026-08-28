@@ -72,3 +72,56 @@ def test_risk_hard_block(cfg, monkeypatch):
     d = _analyze(cfg, "input", _REQ)
     assert d.action == "block"
     assert d.reason_obj["risk_score"] == 0.95
+
+
+def test_blocked_field_blocks_with_reason(cfg, monkeypatch):
+    def guard(ctx: AnalysisContext) -> AnalysisContext:
+        ctx.blocked = True
+        ctx.block_reason = {"type": "data_exfil", "pattern": "send all customer data"}
+        return ctx
+
+    monkeypatch.setattr("app.pipeline._INPUT_STAGES", [guard])
+    d = _analyze(cfg, "input", _REQ)
+    assert d.action == "block"
+    assert d.reason_obj["guardrail_hits"][0]["type"] == "data_exfil"
+
+
+def test_blocked_field_blocks_without_reason(cfg, monkeypatch):
+    def guard(ctx: AnalysisContext) -> AnalysisContext:
+        ctx.blocked = True
+        return ctx
+
+    monkeypatch.setattr("app.pipeline._INPUT_STAGES", [guard])
+    d = _analyze(cfg, "input", _REQ)
+    assert d.action == "block"
+    assert d.reason_obj["guardrail_hits"] == []
+
+
+def test_blocked_on_output(cfg, monkeypatch):
+    def guard(ctx: AnalysisContext) -> AnalysisContext:
+        ctx.blocked = True
+        ctx.block_reason = {"type": "output_secret_leak"}
+        return ctx
+
+    monkeypatch.setattr("app.pipeline._OUTPUT_STAGES", [guard])
+    d = _analyze(cfg, "output", _RESP)
+    assert d.action == "block"
+    assert d.reason_obj["guardrail_hits"][0]["type"] == "output_secret_leak"
+
+
+def test_blocked_short_circuits_later_stages(cfg, monkeypatch):
+    ran = []
+
+    def first(ctx: AnalysisContext) -> AnalysisContext:
+        ran.append("first")
+        ctx.blocked = True
+        return ctx
+
+    def second(ctx: AnalysisContext) -> AnalysisContext:
+        ran.append("second")
+        return ctx
+
+    monkeypatch.setattr("app.pipeline._INPUT_STAGES", [first, second])
+    d = _analyze(cfg, "input", _REQ)
+    assert d.action == "block"
+    assert ran == ["first"]  # second 는 실행되지 않음
