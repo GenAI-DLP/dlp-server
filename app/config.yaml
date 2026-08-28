@@ -1,0 +1,23 @@
+# dlp-server 런타임 설정.
+# 값의 의미는 docs/architecture/dlp-server-architecture.md §9 참고.
+
+fail_action: block        # block | allow — DLP 내부 예외 시 반환할 판정 (시연 안정용 스위치)
+soft_budget_sec: 2.5      # 프록시 deadline 3s 대비 내부 처리 예산
+
+session_ttl_sec: 1800     # 세션 컨텍스트 TTL (초)
+vault_ttl_sec: 1800       # 토큰 볼트 TTL (초) — 세션과 수명 분리
+
+purpose:
+  backend: rule           # rule | llm
+  llm_timeout_sec: 1.5
+
+risk:
+  hard_block: 0.8         # 누적 위험도 임계값 — 초과 시 block
+
+grpc:
+  host: 0.0.0.0
+  port: 50051
+
+api:
+  host: 0.0.0.0
+  port: 8000

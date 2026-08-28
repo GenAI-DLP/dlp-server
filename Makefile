@@ -1,4 +1,4 @@
-.PHONY: proto install run test
+.PHONY: proto install run test lint fmt
 
 # macOS / Linux 용 shortcut. Windows(conda)에서는
 # `python scripts/gen_proto.py` 를 직접 실행하세요.
@@ -9,7 +9,13 @@ install:
 	pip install -r requirements.txt
 
 run:
-	uvicorn app.main:app --reload
+	python -m app.main
 
 test:
 	pytest -q
+
+lint:
+	ruff check .
+
+fmt:
+	ruff format .

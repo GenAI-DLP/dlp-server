@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# 로컬 데이터 (JSONL/SQLite 감사 로그 등)
+*.sqlite
+*.sqlite3
+*.jsonl
+!eval/datasets/**/*.jsonl
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# 환경설정 오버라이드
+.env
+config.local.yaml
+
+# protoc 생성물 — VCS 제외, 빌드 시 생성
+/app/proto/dlp_pb2.py
+/app/proto/dlp_pb2_grpc.py
