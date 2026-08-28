@@ -8,7 +8,7 @@ db/schema.sql 을 대상 PostgreSQL DB 에 적용한다.
     --keep : DROP 생략, 스키마만 재실행 (누적 적용 확인용)
     --force: 안전 DB 이름 가드(dlp / dlp_test) 무시
 
-DSN 우선순위: --dsn > 환경변수 DLP_DB_DSN > postgresql://dlp:dlp@localhost:5432/dlp
+DSN 우선순위: --dsn > 환경변수 DLP_DB__DSN > postgresql://dlp:dlp@localhost:5432/dlp
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ DEFAULT_DSN = "postgresql://dlp:dlp@localhost:5432/dlp"
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="db/schema.sql 을 대상 DB 에 적용")
-    parser.add_argument("--dsn", default=os.environ.get("DLP_DB_DSN", DEFAULT_DSN))
+    parser.add_argument("--dsn", default=os.environ.get("DLP_DB__DSN", DEFAULT_DSN))
     parser.add_argument("--keep", action="store_true", help="DROP SCHEMA 를 생략한다")
     parser.add_argument("--force", action="store_true", help="안전 DB 이름 가드를 무시한다")
     args = parser.parse_args()

@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      DLP_DB_DSN: postgresql://dlp:dlp@localhost:5432/dlp
+      DLP_DB__DSN: postgresql://dlp:dlp@localhost:5432/dlp
 
     services:
       postgres:
