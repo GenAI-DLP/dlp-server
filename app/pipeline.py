@@ -26,6 +26,7 @@ from collections.abc import Callable
 
 from .adapters import select_adapter
 from .config import Config, load_config
+from .guardrail.injection import injection_guard
 from .logging.events import LogEvent, log_event
 from .models import AnalysisContext, Decision, Turn
 
@@ -34,12 +35,12 @@ logger = logging.getLogger(__name__)
 Stage = Callable[[AnalysisContext], AnalysisContext]
 
 # 순서 (docs/architecture/dlp-server-architecture.md §3.1)
-#   [2] Input Guard (c)      : ctx.injection 채움 (hit 이면 block)
+#   [2] Input Guard (c)      : ctx.injection 채움. hit 이면 ctx.blocked 도 세팅해 조기 종료
 #   [3] PII 탐지 (b)        : ctx.new_turn_spans  (detect.run(text) -> list[Span])
 #   [4] 멀티턴 누적 (e)     : ctx.accumulated / ctx.risk_score  (탐지 결과를 세션에 누적)
 #   [5] 목적+정책 (f)       : span 별 action 결정
 #   [6] 변환+토큰화 (g, a)  : ctx.turns[*].text 갱신
-_INPUT_STAGES: list[Stage] = []
+_INPUT_STAGES: list[Stage] = [injection_guard]
 # 출력: [2] detokenize (a) / [3] Output Guard (c)
 _OUTPUT_STAGES: list[Stage] = []
 

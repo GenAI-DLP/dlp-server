@@ -20,6 +20,9 @@ purpose:
 risk:
   hard_block: 0.8         # 누적 위험도 임계값 — 초과 시 block
 
+guardrail:
+  injection_threshold: 0.7  # Input Guard hit 판정 임계 (DLP_GUARDRAIL__INJECTION_THRESHOLD)
+
 grpc:
   host: 0.0.0.0
   port: 50051

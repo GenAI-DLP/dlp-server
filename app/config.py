@@ -38,6 +38,12 @@ class RiskConfig(BaseModel):
     hard_block: float = 0.8  # 누적 위험도 임계값 — 초과 시 block
 
 
+class GuardrailConfig(BaseModel):
+    # Input Guard hit 판정 임계 (0~1). 매칭된 규칙 score 가 이 값 이상이면 block.
+    # env DLP_GUARDRAIL__INJECTION_THRESHOLD 로 오버라이드
+    injection_threshold: float = 0.7
+
+
 class DbConfig(BaseModel):
     dsn: str = "postgresql://dlp:dlp@localhost:5432/dlp"  # DLP_DB__DSN 로 오버라이드
     pool_min: int = 1
@@ -80,6 +86,7 @@ class Config(BaseSettings):
     vault: VaultConfig = Field(default_factory=VaultConfig)  # DLP_VAULT__KEY
     purpose: PurposeConfig = Field(default_factory=PurposeConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    guardrail: GuardrailConfig = Field(default_factory=GuardrailConfig)  # DLP_GUARDRAIL__*
     grpc: GrpcConfig = Field(default_factory=GrpcConfig)  # DLP_GRPC__PORT ...
     api: ApiConfig = Field(default_factory=ApiConfig)
 

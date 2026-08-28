@@ -83,7 +83,7 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test python scripts/apply_sc
 DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 ```
 
-`45 passed` (23 + `test_db.py` 5 + `test_vault.py` 17), skip 0 이면 정상.
+`74 passed` (52 + `test_db.py` 5 + `test_vault.py` 17), skip 0 이면 정상.
 서버 `/health` 로도 확인 가능 → [실행](#실행) 절.
 
 ### 로컬에 PostgreSQL 이 이미 있으면
@@ -133,6 +133,7 @@ curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down"
 | `DLP_DB__DSN` | PostgreSQL 접속 문자열 (기본 `postgresql://dlp:dlp@localhost:5432/dlp`) |
 | `DLP_VAULT__KEY` | 볼트 `cipher_value` AES-GCM 키 — base64 32바이트. 가역적 토큰화(기능 a) 필수, 미설정 시 토큰 암·복호에서 에러 |
 | `DLP_FAIL_ACTION` | `block`(기본) \| `allow` — 내부 예외 시 반환할 판정 (시연 안정용) |
+| `DLP_GUARDRAIL__INJECTION_THRESHOLD` | Input Guard(기능 c 입력) hit 판정 임계 0~1 (기본 `0.7`). 매칭된 규칙 score 가 이 값 이상이면 `block` |
 | `DLP_GRPC__PORT` | gRPC 포트 (기본 `50051`) |
 | `DLP_LOG_PATH` | 감사 로그 JSONL 경로 |
 | `DLP_CONFIG` | 설정 파일(yaml) 경로 |
@@ -182,7 +183,8 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 | `app/grpc_server.py`, `app/api.py`, `app/main.py` | transport 어댑터 + 부트스트랩 |
 | `app/adapters/` | 본문 형식 파서 (gateway / openai / anthropic) |
 | `app/transform/vault.py` | 가역적 토큰화 (기능 a) — `token_vault` 레포지토리 + AES-GCM + 복원 인가 |
-| `app/{detect,guardrail,context,purpose,policy}/`, `transform/apply.py` | 기능 b~h (구현 예정) |
+| `app/guardrail/injection.py` | Input Guard (기능 c 입력) — 프롬프트 인젝션·탈옥·반출 규칙 탐지, 적중 시 조기 `block` |
+| `app/{detect,context,purpose,policy}/`, `guardrail/output_check.py`, `transform/apply.py` | 기능 b · c(출력) · e~h (구현 예정) |
 | `app/proto/` | protoc 생성물 (VCS 미포함) |
 | `db/schema.sql` | PostgreSQL 스키마 (docs SSOT 의 복사본). `scripts/apply_schema.py` 로 적용 |
 | `eval/`, `tests/` | 성능 평가 / 단위·통합 테스트 |
