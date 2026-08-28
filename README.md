@@ -30,8 +30,7 @@ python scripts/gen_proto.py
 `scripts/gen_proto.py` 는 `grpc_tools.protoc` 로 `dlp_pb2.py` / `dlp_pb2_grpc.py` 를 만들고,
 gRPC 스텁의 import 경로를 `app.proto` 패키지 기준으로 보정한다. `proto/dlp.proto` 가 바뀌면 다시 실행.
 
-> macOS/Linux 는 `make proto` / `make install` / `make test` 단축키 사용 가능.
-> Windows(conda)는 위 명령을 직접 실행.
+> `make` 단축키는 아래 [make 단축키](#make-단축키) 절 참고. Windows(conda)는 명령을 직접 실행.
 
 ## 실행
 
@@ -63,6 +62,19 @@ curl http://localhost:8000/health      # {"status":"ok"}
 ```bash
 pytest -q
 ```
+
+## make 단축키
+
+`make` 가 있으면 (macOS/Linux, 또는 Windows에 별도 설치한 경우):
+
+| 명령 | 실행 내용 |
+|---|---|
+| `make install` | `pip install -r requirements.txt` |
+| `make proto` | `python scripts/gen_proto.py` |
+| `make run` | `python -m app.main` (gRPC :50051 + FastAPI :8000) |
+| `make test` | `pytest -q` |
+
+`make` 가 없으면 오른쪽 명령을 직접 실행하면 된다.
 
 ## 구조 (요약)
 
