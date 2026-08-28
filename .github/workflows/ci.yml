@@ -19,6 +19,8 @@ jobs:
 
     env:
       DLP_DB__DSN: postgresql://dlp:dlp@localhost:5432/dlp
+      # 볼트 AES-GCM 테스트용 throwaway 키 (base64 32B). 운영 키 아님.
+      DLP_VAULT__KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
 
     services:
       postgres:
