@@ -48,7 +48,7 @@ def analyze(
 
         logger.warning("알 수 없는 direction=%r — allow 처리", direction)
         return Decision(action="allow", reason_obj={"note": f"unknown direction {direction!r}"})
-    except Exception:  # noqa: BLE001 — 파이프라인은 절대 예외를 밖으로 던지지 않는다
+    except Exception:  # 파이프라인은 절대 예외를 밖으로 던지지 않는다
         logger.exception("pipeline.analyze 내부 오류 — fail_action=%s 로 판정", cfg.fail_action)
         return Decision(
             action=cfg.fail_action,

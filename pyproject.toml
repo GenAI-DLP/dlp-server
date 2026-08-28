@@ -1,0 +1,10 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["app/proto"]   # protoc 생성물은 검사 제외
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]  # pycodestyle, pyflakes, isort, pyupgrade, bugbear
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

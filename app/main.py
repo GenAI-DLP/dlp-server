@@ -34,7 +34,7 @@ def main() -> None:
 
     stop = threading.Event()
 
-    def _handle(signum, _frame):  # noqa: ANN001
+    def _handle(signum, _frame):
         logger.info("신호 %s 수신 — 종료", signum)
         stop.set()
 

@@ -80,4 +80,6 @@ class Decision:
 
     action: str  # allow | block | transform  (WIRE_ACTIONS)
     transformed_body: bytes | None = None
-    reason_obj: dict = field(default_factory=dict)  # 세부 변환 종류·근거·엔티티 요약 → Verdict.reason
+    reason_obj: dict = field(
+        default_factory=dict
+    )  # 세부 변환 종류·근거·엔티티 요약 → Verdict.reason

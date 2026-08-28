@@ -73,6 +73,8 @@ pytest -q
 | `make proto` | `python scripts/gen_proto.py` |
 | `make run` | `python -m app.main` (gRPC :50051 + FastAPI :8000) |
 | `make test` | `pytest -q` |
+| `make lint` | `ruff check .` |
+| `make fmt` | `ruff format .` |
 
 `make` 가 없으면 오른쪽 명령을 직접 실행하면 된다.
 

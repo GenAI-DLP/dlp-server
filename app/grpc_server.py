@@ -26,7 +26,7 @@ class DLPInspectorServicer(dlp_pb2_grpc.DLPInspectorServicer):
     def __init__(self, config: Config) -> None:
         self._config = config
 
-    def Inspect(self, request: "dlp_pb2.InspectRequest", context) -> "dlp_pb2.Verdict":
+    def Inspect(self, request: dlp_pb2.InspectRequest, context) -> dlp_pb2.Verdict:
         try:
             decision = analyze(
                 session_id=request.session_id,

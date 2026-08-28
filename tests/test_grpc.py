@@ -35,7 +35,7 @@ def stub():
         server.stop(grace=0)
 
 
-def _req(direction: str) -> "dlp_pb2.InspectRequest":
+def _req(direction: str) -> dlp_pb2.InspectRequest:
     return dlp_pb2.InspectRequest(
         session_id="s-test",
         direction=direction,
@@ -71,6 +71,7 @@ def test_action_is_wire_value(stub):
 
 def test_grpc_layer_fail_closed(stub, monkeypatch):
     """grpc_server.Inspect 예외 → gRPC 에러 대신 Verdict(fail_action)."""
+
     def boom(*_a, **_kw):
         raise RuntimeError("boom")
 
@@ -82,10 +83,11 @@ def test_grpc_layer_fail_closed(stub, monkeypatch):
 
 def test_pipeline_fail_closed(monkeypatch):
     """pipeline.analyze 스테이지 예외 → 유효한 Decision(fail_action)."""
-    monkeypatch.setattr(
-        "app.pipeline._analyze_input",
-        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("stage blew up")),
-    )
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("stage blew up")
+
+    monkeypatch.setattr("app.pipeline._analyze_input", _raise)
     cfg = load_config()
     d = pipeline.analyze("s", "input", "POST", "/x", {}, b"{}", config=cfg)
     assert d.action == cfg.fail_action
