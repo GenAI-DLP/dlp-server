@@ -16,6 +16,25 @@ permissions:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+
+    env:
+      DLP_DB__DSN: postgresql://dlp:dlp@localhost:5432/dlp
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dlp
+          POSTGRES_PASSWORD: dlp
+          POSTGRES_DB: dlp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +56,9 @@ jobs:
 
       - name: Ruff format check
         run: ruff format --check .
+
+      - name: Apply DB schema
+        run: python scripts/apply_schema.py
 
       - name: Pytest
         run: pytest -q
