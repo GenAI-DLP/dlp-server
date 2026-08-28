@@ -12,30 +12,50 @@ Go 프록시(`dlp-proxy-server`)가 gRPC 로 판정을 요청하면 `pipeline.an
 ## 요구사항
 
 - Python 3.11+
+- PostgreSQL 16 — 볼트·정책·감사 계층 ([DB (PostgreSQL)](#db-postgresql) 절)
 - gRPC 계약(`proto/dlp.proto`)은 git submodule (`GenAI-DLP/dlp-proto`)
 
 ## 셋업
 
+### 1. `.env` 세팅
+
+**`DLP_VAULT__KEY` 는 채워야 한다** — 가역적 토큰화가 이 키로
+`token_vault.cipher_value` 를 AES-GCM 암·복호하며, 없으면 토큰 경로에서 에러가 난다.
+
+base64 32바이트 키 생성:
+
 ```bash
-# 1. proto 계약 가져오기 (proto/dlp.proto)
-git submodule update --init
+python -c "import base64, os; print(base64.b64encode(os.urandom(32)).decode())"
+```
 
-# 2. 의존성 설치
+나머지 키(`DLP_DB__DSN` 등)는 기본값이 있어 로컬에선 그대로 둬도 된다. 전체 목록은
+[설정](#설정) 절 참고.
+
+### 2. 의존성 · proto
+
+```bash
+# (권장) 가상환경
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+git submodule update --init          # proto/dlp.proto 가져오기
 pip install -r requirements.txt
-
-# 3. protoc 생성물 만들기 (app/proto/dlp_pb2*.py — VCS 미포함, 로컬에서 생성)
-python scripts/gen_proto.py
+python scripts/gen_proto.py          # app/proto/dlp_pb2*.py (VCS 미포함, 로컬 생성)
 ```
 
 `scripts/gen_proto.py` 는 `grpc_tools.protoc` 로 `dlp_pb2.py` / `dlp_pb2_grpc.py` 를 만들고,
 gRPC 스텁의 import 경로를 `app.proto` 패키지 기준으로 보정한다. `proto/dlp.proto` 가 바뀌면 다시 실행.
 
+### 3. DB
+
+아래 [DB (PostgreSQL)](#db-postgresql) 절을 따라 컨테이너 기동 + 스키마 적용.
+
 > `make` 단축키는 아래 [make 단축키](#make-단축키) 절 참고. Windows(conda)는 명령을 직접 실행.
 
 ## DB (PostgreSQL)
 
-볼트·정책·감사 계층은 PostgreSQL 을 쓴다. 서버는 DB 없이도 뜨지만 `/health` 의 `db` 가 `down` 이
-되고 `tests/test_db.py` 는 skip 된다. `dlp`(개발용) · `dlp_test`(pytest용) 두 DB 를 쓴다.
+볼트·정책·감사 계층은 PostgreSQL 을 쓴다. 
+서버는 DB 없이도 뜨지만 `/health` 의 `db` 가 `down` 이 되고 DB 의존 테스트(`test_db.py` · `test_vault.py`)는 skip 된다. 
+`dlp`(개발용) · `dlp_test`(pytest용) 두 DB 를 쓴다.
 
 ### 빠른 시작 — Docker
 
@@ -63,7 +83,7 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test python scripts/apply_sc
 DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 ```
 
-`28 passed` (기존 23 + `test_db.py` 5), skip 0 이면 정상.
+`45 passed` (23 + `test_db.py` 5 + `test_vault.py` 17), skip 0 이면 정상.
 서버 `/health` 로도 확인 가능 → [실행](#실행) 절.
 
 ### 로컬에 PostgreSQL 이 이미 있으면
@@ -111,6 +131,7 @@ curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down"
 | 환경변수 / .env 키 | 의미 |
 |---|---|
 | `DLP_DB__DSN` | PostgreSQL 접속 문자열 (기본 `postgresql://dlp:dlp@localhost:5432/dlp`) |
+| `DLP_VAULT__KEY` | 볼트 `cipher_value` AES-GCM 키 — base64 32바이트. 가역적 토큰화(기능 a) 필수, 미설정 시 토큰 암·복호에서 에러 |
 | `DLP_FAIL_ACTION` | `block`(기본) \| `allow` — 내부 예외 시 반환할 판정 (시연 안정용) |
 | `DLP_GRPC__PORT` | gRPC 포트 (기본 `50051`) |
 | `DLP_LOG_PATH` | 감사 로그 JSONL 경로 |
@@ -122,11 +143,15 @@ curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down"
 pytest -q
 ```
 
-`tests/test_db.py` 는 PostgreSQL 이 붙어 있을 때만 돈다 (없으면 skip). DB 포함해 돌리려면:
+`tests/test_db.py` · `tests/test_vault.py` 는 PostgreSQL 이 붙어 있을 때만 돈다 (없으면 skip).
+
+DB 포함해 돌리려면:
 
 ```bash
 DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 ```
+
+`test_vault.py` 는 볼트 키를 테스트 안에서 주입하므로 `DLP_VAULT__KEY` 없이도 돈다.
 
 ## make 단축키
 
@@ -156,7 +181,8 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 | `app/db.py` | PostgreSQL 커넥션 풀 (psycopg3). 볼트·정책·감사가 공유 |
 | `app/grpc_server.py`, `app/api.py`, `app/main.py` | transport 어댑터 + 부트스트랩 |
 | `app/adapters/` | 본문 형식 파서 (gateway / openai / anthropic) |
-| `app/{detect,guardrail,context,purpose,policy,transform}/` | 기능 a~h (구현 예정) |
+| `app/transform/vault.py` | 가역적 토큰화 (기능 a) — `token_vault` 레포지토리 + AES-GCM + 복원 인가 |
+| `app/{detect,guardrail,context,purpose,policy}/`, `transform/apply.py` | 기능 b~h (구현 예정) |
 | `app/proto/` | protoc 생성물 (VCS 미포함) |
 | `db/schema.sql` | PostgreSQL 스키마 (docs SSOT 의 복사본). `scripts/apply_schema.py` 로 적용 |
 | `eval/`, `tests/` | 성능 평가 / 단위·통합 테스트 |
