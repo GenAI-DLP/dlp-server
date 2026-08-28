@@ -43,6 +43,7 @@ class Config(BaseModel):
     soft_budget_sec: float = 2.5  # 프록시 deadline 3s 대비 내부 예산
     session_ttl_sec: int = 1800  # 세션 컨텍스트 TTL
     vault_ttl_sec: int = 1800  # 토큰 볼트 TTL (세션과 수명 분리)
+    log_path: str = "log_events.jsonl"  # 감사 로그 JSONL sink 경로
 
     purpose: PurposeConfig = Field(default_factory=PurposeConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
@@ -63,6 +64,8 @@ def load_config(path: str | Path | None = None) -> Config:
         cfg.fail_action = os.environ["DLP_FAIL_ACTION"]
     if os.environ.get("DLP_GRPC_PORT"):
         cfg.grpc.port = int(os.environ["DLP_GRPC_PORT"])
+    if os.environ.get("DLP_LOG_PATH"):
+        cfg.log_path = os.environ["DLP_LOG_PATH"]
 
     if cfg.fail_action not in ("block", "allow"):
         raise ValueError(f"fail_action 은 block|allow 여야 함: {cfg.fail_action!r}")

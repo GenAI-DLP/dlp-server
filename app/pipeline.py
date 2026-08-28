@@ -20,10 +20,12 @@ gRPC 서버 · HTTP API · eval 스크립트가 모두 이 함수를 호출한�
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 
 from .adapters import select_adapter
 from .config import Config, load_config
+from .logging.events import LogEvent, log_event
 from .models import AnalysisContext, Decision, Turn
 
 logger = logging.getLogger(__name__)
@@ -62,20 +64,57 @@ def analyze(
 ) -> Decision:
     """평문 요청/응답을 받아 판정(Decision)을 돌려준다. 예외를 전파하지 않는다."""
     cfg = config or _default_config()
+    t0 = time.perf_counter()
     try:
-        if direction == "input":
-            return _analyze_input(session_id, path, headers, body, cfg)
-        if direction == "output":
-            return _analyze_output(session_id, path, headers, body, cfg)
-
-        logger.warning("알 수 없는 direction=%r — allow 처리", direction)
-        return Decision(action="allow", reason_obj={"note": f"unknown direction {direction!r}"})
+        decision = _dispatch(session_id, direction, path, headers, body, cfg)
     except Exception:  # 파이프라인은 절대 예외를 밖으로 던지지 않는다
         logger.exception("pipeline.analyze 내부 오류 — fail_action=%s 로 판정", cfg.fail_action)
-        return Decision(
+        decision = Decision(
             action=cfg.fail_action,
             reason_obj={"fail_policy_applied": True, "stage": "pipeline"},
         )
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    _emit_log(session_id, direction, decision, latency_ms, cfg)
+    return decision
+
+
+def _dispatch(
+    session_id: str,
+    direction: str,
+    path: str,
+    headers: dict[str, str],
+    body: bytes,
+    cfg: Config,
+) -> Decision:
+    if direction == "input":
+        return _analyze_input(session_id, path, headers, body, cfg)
+    if direction == "output":
+        return _analyze_output(session_id, path, headers, body, cfg)
+    logger.warning("알 수 없는 direction=%r — allow 처리", direction)
+    return Decision(action="allow", reason_obj={"note": f"unknown direction {direction!r}"})
+
+
+def _emit_log(
+    session_id: str, direction: str, decision: Decision, latency_ms: int, cfg: Config
+) -> None:
+    r = decision.reason_obj or {}
+    event = LogEvent(
+        session_id=session_id,
+        direction=direction,
+        provider=r.get("provider", "unknown"),
+        verdict_action=decision.action,
+        latency_ms=latency_ms,
+        purpose=r.get("purpose"),
+        transforms=r.get("transforms", []),
+        entities_summary=r.get("entities_summary", []),
+        guardrail_hits=r.get("guardrail_hits", []),
+        fail_policy_applied=bool(r.get("fail_policy_applied", False)),
+        reason=r,
+    )
+    try:
+        log_event(event, cfg.log_path)
+    except Exception:  # 로그 실패가 판정을 막지 않는다
+        logger.exception("감사 로그 기록 실패")
 
 
 def _run_stages(ctx: AnalysisContext, stages: list[Stage]) -> AnalysisContext:
@@ -87,6 +126,7 @@ def _run_stages(ctx: AnalysisContext, stages: list[Stage]) -> AnalysisContext:
 def _reason(ctx: AnalysisContext, verdict: str, **extra: object) -> dict:
     reason: dict = {
         "verdict": verdict,
+        "provider": ctx.provider,
         "transforms": [],
         "entities_summary": [],
         "purpose": None,
