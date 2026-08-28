@@ -44,6 +44,12 @@ class DbConfig(BaseModel):
     pool_max: int = 8
 
 
+class VaultConfig(BaseModel):
+    # 볼트 cipher_value 앱레벨 AES-GCM 키. base64 인코딩된 32바이트.
+    # env DLP_VAULT__KEY 로 주입.
+    key: str = ""
+
+
 class GrpcConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 50051
@@ -71,6 +77,7 @@ class Config(BaseSettings):
     log_path: str = "log_events.jsonl"  # 감사 로그 JSONL sink 경로 (DLP_LOG_PATH)
 
     db: DbConfig = Field(default_factory=DbConfig)  # DLP_DB__DSN, DLP_DB__POOL_MIN ...
+    vault: VaultConfig = Field(default_factory=VaultConfig)  # DLP_VAULT__KEY
     purpose: PurposeConfig = Field(default_factory=PurposeConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     grpc: GrpcConfig = Field(default_factory=GrpcConfig)  # DLP_GRPC__PORT ...

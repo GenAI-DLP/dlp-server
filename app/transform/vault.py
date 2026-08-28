@@ -10,10 +10,13 @@ fail-closed: detokenize 와 DB 오류는 None 반환(예외 전파 안 함). tok
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
+import os
 import re
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -286,11 +289,27 @@ def _log_access(
     )
 
 
+_NONCE_BYTES = 12
+
+
+def _cipher() -> AESGCM:
+    """config.vault.key(base64 32B)로 만든 AES-GCM. 키가 없거나 길이가 틀리면 raise."""
+    raw = load_config().vault.key
+    if not raw:
+        raise RuntimeError("config.vault.key (DLP_VAULT__KEY) 미설정 — 볼트 암·복호 불가")
+    key = base64.b64decode(raw)
+    if len(key) != 32:
+        raise RuntimeError(f"vault key 는 base64 인코딩된 32바이트여야 함 (현재 {len(key)}B)")
+    return AESGCM(key)
+
+
 def _encrypt(value: str) -> bytes:
-    """원본 → cipher_value. 추후 앱레벨 AES-GCM 으로 교체."""
-    return value.encode("utf-8")
+    """원본 → cipher_value. nonce(12B) ‖ AES-GCM 암호문. 키는 저장소 밖(config)에만 있다."""
+    nonce = os.urandom(_NONCE_BYTES)
+    return nonce + _cipher().encrypt(nonce, value.encode("utf-8"), None)
 
 
 def _decrypt(blob: bytes) -> str:
-    """cipher_value → 원본. 추후 AES-GCM 복호로 교체."""
-    return bytes(blob).decode("utf-8")
+    """cipher_value → 원본. 앞 12B 를 nonce 로 분리해 복호."""
+    data = bytes(blob)
+    return _cipher().decrypt(data[:_NONCE_BYTES], data[_NONCE_BYTES:], None).decode("utf-8")
