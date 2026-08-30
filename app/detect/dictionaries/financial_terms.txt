@@ -1,0 +1,22 @@
+# 하이브리드 PII 탐지 — 사전 레이어 기본 데이터 (데모/샘플)
+#
+# 형식: term<TAB>type<TAB>confidence
+# type 은 app/models.py 의 Span.type enum 값과 일치해야 한다.
+#
+# ⚠️ 이 파일은 자리표시용 샘플이다. 실제 운영 사전(실명 리스트, 금융 용어집 등)은
+#    컴플라이언스/도메인 팀에서 받은 리스트로 교체해야 한다.
+#
+# 설계 원칙: 2자 미만 term 은 로딩 시 스킵한다 (한글은 단어 경계가 없어서
+# 한 글자짜리 성씨 등을 등록하면 오탐이 폭증한다 — dictionary.py 참고).
+
+김민준	NAME	0.55
+이서연	NAME	0.55
+박지훈	NAME	0.55
+최수아	NAME	0.55
+
+연체정보	CREDIT_INFO	0.75
+신용등급	CREDIT_INFO	0.7
+대출한도	CREDIT_INFO	0.7
+채무불이행	CREDIT_INFO	0.75
+개인회생	CREDIT_INFO	0.7
+신용회복위원회	CREDIT_INFO	0.65
