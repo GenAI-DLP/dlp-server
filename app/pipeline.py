@@ -29,6 +29,8 @@ from .config import Config, load_config
 from .guardrail.injection import injection_guard
 from .logging.events import LogEvent, log_event
 from .models import AnalysisContext, Decision, Turn
+from .policy.engine import purpose_policy_stage
+from .purpose.role_resolver import resolve as resolve_role
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +40,10 @@ Stage = Callable[[AnalysisContext], AnalysisContext]
 #   [2] Input Guard (c)      : ctx.injection 채움. hit 이면 ctx.blocked 도 세팅해 조기 종료
 #   [3] PII 탐지 (b)        : ctx.new_turn_spans  (detect.run(text) -> list[Span])
 #   [4] 멀티턴 누적 (e)     : ctx.accumulated / ctx.risk_score  (탐지 결과를 세션에 누적)
-#   [5] 목적+정책 (f)       : span 별 action 결정
+#   [5] 목적+정책 (f)       : ctx.purpose / ctx.span_actions 채움. block action 이면 ctx.blocked
 #   [6] 변환+토큰화 (g, a)  : ctx.turns[*].text 갱신
-_INPUT_STAGES: list[Stage] = [injection_guard]
+# [3][4] 는 아직 미배선 — span 이 비어 있어 [5] 는 purpose 만 채우고 통과한다.
+_INPUT_STAGES: list[Stage] = [injection_guard, purpose_policy_stage]
 # 출력: [2] detokenize (a) / [3] Output Guard (c)
 _OUTPUT_STAGES: list[Stage] = []
 
@@ -146,7 +149,7 @@ def _reason(ctx: AnalysisContext, verdict: str, **extra: object) -> dict:
         "provider": ctx.provider,
         "transforms": [],
         "entities_summary": [],
-        "purpose": None,
+        "purpose": ctx.purpose,
         "risk_score": round(ctx.risk_score, 4),
         "guardrail_hits": [],
         "fail_policy_applied": False,
@@ -167,7 +170,7 @@ def _analyze_input(
         session_id=session_id,
         direction="input",
         provider=adapter.name,
-        role=None,  # role 은 [5] 목적+정책(f)에서 role_resolver 로 채움
+        role=resolve_role(headers),  # 헤더 → role. 정책(f) 입력 축
         turns=adapter.extract_turns(body),
     )
     original_texts = [t.text for t in ctx.turns]
@@ -200,7 +203,7 @@ def _analyze_output(
         session_id=session_id,
         direction="output",
         provider=adapter.name,
-        role=None,
+        role=resolve_role(headers),  # detokenize 인가 검사(c-output)용
         turns=[Turn(role="assistant", text=text)],
     )
 
