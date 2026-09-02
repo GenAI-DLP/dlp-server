@@ -1,0 +1,29 @@
+# 목적 기반 동적 데이터 접근 제어 (기능 f) — 정책 시드.
+#
+# 작성·시드 포맷이다. scripts/seed_policy.py 가 이 파일을 읽어
+# policy_versions / policy_rules / policy_risk_overrides 로 적재하고,
+# 런타임 policy/engine.py 는 PostgreSQL 에서 읽는다.
+#
+# 컬럼 매핑: rules[*] -> policy_rules, risk_overrides[*] -> policy_risk_overrides,
+#            defaults -> purpose=role=entity=NULL 인 최저 우선순위 규칙.
+# "*" 또는 키 누락 = 와일드카드(컬럼 NULL).
+#
+# SSOT: docs/schemas/dlp-server/policy.md
+
+purposes: [customer_support, doc_summarize, code_help, data_analysis, fraud_investigation, unknown]
+
+rules:
+  - {purpose: doc_summarize,       role: "*",      entity: "*",    action: tokenize}
+  - {purpose: doc_summarize,       role: "*",      entity: CARD,   action: block}
+  - {purpose: data_analysis,       role: "*",      entity: RRN,    action: generalize}
+  - {purpose: data_analysis,       role: "*",      entity: AMOUNT, action: aggregate}
+  - {purpose: code_help,           role: "*",      entity: "*",    action: block}
+  - {purpose: customer_support,    role: agent_l1, entity: PHONE,  action: mask}
+  - {purpose: fraud_investigation, role: agent_l2, entity: PHONE,  action: keep}
+  - {purpose: unknown,             role: "*",      entity: "*",    action: tokenize}
+
+defaults: {action: tokenize}
+
+risk_overrides:
+  - {when: "injection.hit",     action: block}
+  - {when: "risk_score >= 0.8", action: block}

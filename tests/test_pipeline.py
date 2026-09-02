@@ -109,6 +109,37 @@ def test_blocked_on_output(cfg, monkeypatch):
     assert d.reason_obj["guardrail_hits"][0]["type"] == "output_secret_leak"
 
 
+def test_purpose_policy_stage_populates_span_actions(cfg, monkeypatch):
+    from app.models import Span
+    from app.policy import engine
+
+    # DB 없이: 캐시에 규칙셋 직접 주입 (CARD → block, 그 외 → tokenize)
+    monkeypatch.setattr(
+        engine,
+        "_cache",
+        engine.Ruleset(
+            rules=[
+                engine._Rule(None, None, "CARD", "block", 0),
+                engine._Rule(None, None, None, "tokenize", -1),
+            ]
+        ),
+    )
+
+    def fake_detect(ctx: AnalysisContext) -> AnalysisContext:
+        ctx.new_turn_spans = [
+            Span("NAME", "홍길동", 0, 3, 0.6, "dict"),
+            Span("CARD", "4111-1111-1111-1111", 4, 23, 0.97, "regex"),
+        ]
+        return ctx
+
+    monkeypatch.setattr("app.pipeline._INPUT_STAGES", [fake_detect, engine.purpose_policy_stage])
+    d = _analyze(cfg, "input", _REQ)
+
+    assert d.action == "block"  # CARD span 이 block action
+    assert d.reason_obj["guardrail_hits"][0]["type"] == "policy"
+    assert d.reason_obj["purpose"] is not None
+
+
 def test_blocked_short_circuits_later_stages(cfg, monkeypatch):
     ran = []
 

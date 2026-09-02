@@ -74,6 +74,11 @@ class AnalysisContext:
     )
     blocked: bool = False
     block_reason: dict | None = None  # guardrail_hits 한 조각 형태: {"type": "...", ...}
+    # 목적+정책 스테이지(f) 산출물 — 변환 실행(g)이 소비한다.
+    purpose: str | None = None  # 목적 분류 결과 (purpose_ref 코드)
+    purpose_confidence: float | None = None
+    # (span, action) — action 은 TRANSFORM_ACTIONS 중 하나. f 결정, g 실행.
+    span_actions: list[tuple[Span, str]] = field(default_factory=list)
 
 
 @dataclass
