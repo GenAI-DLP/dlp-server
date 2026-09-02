@@ -45,7 +45,34 @@ python scripts/gen_proto.py          # app/proto/dlp_pb2*.py (VCS 미포함, 로
 `scripts/gen_proto.py` 는 `grpc_tools.protoc` 로 `dlp_pb2.py` / `dlp_pb2_grpc.py` 를 만들고,
 gRPC 스텁의 import 경로를 `app.proto` 패키지 기준으로 보정한다. `proto/dlp.proto` 가 바뀌면 다시 실행.
 
-### 3. DB
+### 3. pre-commit 설정
+
+`pre-commit` 패키지가 설치된 후(위 `pip install -r requirements.txt` 에 포함) Git hook 을 등록한다:
+
+```bash
+pre-commit install
+```
+
+최초 1회만 하면 되고, `.git/hooks/pre-commit` 에 훅이 등록된다. 이후 커밋할 때마다
+`.pre-commit-config.yaml` 에 정의된 Ruff lint + format 이 자동으로 실행된다
+
+커밋 시 자동으로 실행되지만, 수동으로도 실행할 수 있다.
+
+자동 수정:
+
+```bash
+ruff check . --fix
+ruff format .
+```
+
+검사만:
+
+```bash
+ruff check .
+ruff format --check .
+```
+
+### 4. DB
 
 아래 [DB (PostgreSQL)](#db-postgresql) 절을 따라 컨테이너 기동 + 스키마 적용.
 
