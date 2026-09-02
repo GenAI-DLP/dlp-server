@@ -23,9 +23,7 @@ from app.models import Span
 _RRN_PATTERN = re.compile(r"\b(\d{6})[-\s]?([1-4]\d{6})\b")
 _CARD_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 _BIZNO_PATTERN = re.compile(r"\b(\d{3})[-\s]?(\d{2})[-\s]?(\d{5})\b")
-_PHONE_PATTERN = re.compile(
-    r"\b(01[016789]|02|0[3-6]\d)[-\s]?\d{3,4}[-\s]?\d{4}\b"
-)
+_PHONE_PATTERN = re.compile(r"\b(01[016789]|02|0[3-6]\d)[-\s]?\d{3,4}[-\s]?\d{4}\b")
 _EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 # 계좌번호: 은행별 자릿수·구분자가 제각각이라 "숫자-숫자-숫자" 형태의
 # 10~14자리 조합을 느슨하게 매치. 체크섬 없음 → confidence 낮게.
@@ -45,7 +43,7 @@ def _verify_rrn_checksum(digits: str) -> bool:
     if len(digits) != 13 or not digits.isdigit():
         return False
     weights = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]
-    total = sum(int(d) * w for d, w in zip(digits[:12], weights))
+    total = sum(int(d) * w for d, w in zip(digits[:12], weights, strict=True))
     check = (11 - (total % 11)) % 10
     return check == int(digits[12])
 
@@ -71,7 +69,7 @@ def _verify_bizno_checksum(digits: str) -> bool:
     if len(digits) != 10 or not digits.isdigit():
         return False
     weights = [1, 3, 7, 1, 3, 7, 1, 3, 5]
-    total = sum(int(d) * w for d, w in zip(digits[:9], weights))
+    total = sum(int(d) * w for d, w in zip(digits[:9], weights, strict=True))
     total += (int(digits[8]) * 5) // 10
     check = (10 - (total % 10)) % 10
     return check == int(digits[9])

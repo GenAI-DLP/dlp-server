@@ -62,7 +62,10 @@ def load_dictionary(path: Path | str = DEFAULT_DICT_PATH) -> ahocorasick.Automat
             if len(term) < MIN_TERM_LENGTH:
                 logger.debug(
                     "dictionary: %s:%d '%s' 는 %d자 미만이라 스킵",
-                    path, lineno, term, MIN_TERM_LENGTH,
+                    path,
+                    lineno,
+                    term,
+                    MIN_TERM_LENGTH,
                 )
                 skipped += 1
                 continue
@@ -72,7 +75,9 @@ def load_dictionary(path: Path | str = DEFAULT_DICT_PATH) -> ahocorasick.Automat
             except ValueError:
                 logger.warning(
                     "dictionary: %s:%d confidence 파싱 실패 ('%s') — 스킵",
-                    path, lineno, confidence_str,
+                    path,
+                    lineno,
+                    confidence_str,
                 )
                 continue
 

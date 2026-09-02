@@ -6,8 +6,12 @@ from app.models import Span
 
 def make_span(type_, value, start, end, confidence, source):
     return Span(
-        type=type_, value=value, start=start, end=end,
-        confidence=confidence, source=source,
+        type=type_,
+        value=value,
+        start=start,
+        end=end,
+        confidence=confidence,
+        source=source,
     )
 
 
