@@ -71,9 +71,14 @@ docker exec dlp-pg createdb -U dlp dlp_test
 # 3) 스키마 적용 (양쪽)
 python scripts/apply_schema.py
 DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test python scripts/apply_schema.py
+
+# 4) 정책 시드 (기능 f — app/policy/policy.yaml → policy_* 테이블)
+python scripts/seed_policy.py
 ```
 
-3번 각각 `[apply_schema] 적용 완료: dlp` / `... dlp_test` 가 나오면 성공.
+3번 각각 `[apply_schema] 적용 완료: dlp` / `... dlp_test`, 4번 `[seed_policy] 버전 1 활성화 …`
+가 나오면 성공. 스키마를 다시 적용하면 정책도 날아가니 `seed_policy.py` 를 다시 실행한다
+(`--reset` 으로 재적재). pytest 는 시드 없이도 된다(테스트가 자체 시드).
 
 컨테이너 재시작: `docker start dlp-pg` / 정지: `docker stop dlp-pg` / 삭제: `docker rm -f dlp-pg`
 
@@ -83,7 +88,6 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test python scripts/apply_sc
 DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 ```
 
-`74 passed` (52 + `test_db.py` 5 + `test_vault.py` 17), skip 0 이면 정상.
 서버 `/health` 로도 확인 가능 → [실행](#실행) 절.
 
 ### 로컬에 PostgreSQL 이 이미 있으면
@@ -184,7 +188,9 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 | `app/adapters/` | 본문 형식 파서 (gateway / openai / anthropic) |
 | `app/transform/vault.py` | 가역적 토큰화 (기능 a) — `token_vault` 레포지토리 + AES-GCM + 복원 인가 |
 | `app/guardrail/injection.py` | Input Guard (기능 c 입력) — 프롬프트 인젝션·탈옥·반출 규칙 탐지, 적중 시 조기 `block` |
-| `app/{detect,context,purpose,policy}/`, `guardrail/output_check.py`, `transform/apply.py` | 기능 b · c(출력) · e~h (구현 예정) |
+| `app/purpose/`, `app/policy/` | 목적 기반 접근 제어 (기능 f) — 목적 분류 + role 해석 + `(목적×role×엔티티)→조치` 정책 엔진. 입력 [5] 스테이지 |
+| `app/detect/` | 하이브리드 PII 탐지 (기능 b) — regex/사전/병합 레이어 (파이프라인 배선은 예정) |
+| `app/{context}/`, `guardrail/output_check.py`, `transform/apply.py` | 기능 c(출력) · e · g · h (구현 예정) |
 | `app/proto/` | protoc 생성물 (VCS 미포함) |
 | `db/schema.sql` | PostgreSQL 스키마 (docs SSOT 의 복사본). `scripts/apply_schema.py` 로 적용 |
 | `eval/`, `tests/` | 성능 평가 / 단위·통합 테스트 |
