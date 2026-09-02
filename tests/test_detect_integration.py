@@ -7,7 +7,6 @@ detect 패키지에 아직 pipeline.py 오케스트레이터가 없어서, 여�
 """
 
 from app.detect.dictionary import detect as dict_detect
-from app.detect.dictionary import load_dictionary
 from app.detect.merge import merge_spans
 from app.detect.regex_rules import detect as regex_detect
 
@@ -43,8 +42,6 @@ def test_overlapping_regex_types_resolved_by_merge():
     # -> merge.py 가 confidence/우선순위로 하나만 남겨야 함 (완전히 겹치는 구간 기준)
     text = "번호 4111-1111-1111-1111"
     result = run_pipeline(text)
-    # 같은 구간을 두고 CARD(체크섬 통과, 0.97) 가 있으면 그게 살아남아야 함
-    matching = [s for s in result if s.start <= 3 and s.end >= 22]
     # 최소한 CARD 가 결과에 있어야 함 (계좌 패턴과 겹쳐도 confidence 높은 CARD 우선)
     assert any(s.type == "CARD" for s in result)
 

@@ -29,9 +29,9 @@ MAX_CONFIDENCE = 0.999
 
 # 레이어별 최소 통과 confidence (이 미만은 병합 전에 드롭)
 DEFAULT_MIN_CONFIDENCE: dict[str, float] = {
-    "regex": 0.5,   # 체크섬 실패로 낮아진 regex 결과 등
-    "dict": 0.0,    # 사전 매치는 boolean 성격이라 기본적으로 필터링 안 함
-    "ner": 0.7,     # DLP_DETECT__NER_THRESHOLD 기본값과 동일
+    "regex": 0.5,  # 체크섬 실패로 낮아진 regex 결과 등
+    "dict": 0.0,  # 사전 매치는 boolean 성격이라 기본적으로 필터링 안 함
+    "ner": 0.7,  # DLP_DETECT__NER_THRESHOLD 기본값과 동일
 }
 
 
