@@ -25,6 +25,7 @@ import random
 import re
 from datetime import datetime
 
+from app.context import get_last_purpose
 from app.models import AnalysisContext, Span
 from app.transform import vault
 
@@ -45,17 +46,16 @@ def detokenize_stage(ctx: AnalysisContext) -> AnalysisContext:
     vault.detokenize_text 는 access_scope(role/purpose) 를 통과 못 하면 라벨을
     그대로 둔다 (fail-closed) — 여기서 추가로 예외 처리할 필요 없음.
 
-    ⚠️ 알려진 한계: ctx.purpose 는 output 요청에서 항상 None 이다.
-    purpose_policy_stage 는 direction == "input" 일 때만 돌기 때문에, 이 별개의
-    output InspectRequest 는 애초에 원 요청의 purpose 를 모른다. 세션 스토어
-    (기능 e, context 쪽)가 세션별 purpose 를 기억해뒀다가 여기서 읽어오게
-    되면 이 TODO 는 해소된다. 그 전까지는 access_scope 에 "*" 가 없는 토큰은
-    output 단계에서 복원되지 않는다.
+    ctx.purpose 는 context.get_last_purpose(session_id) 로 조회한다 — output
+    InspectRequest 는 원 input 요청과 별개 호출이라 자체적으로 purpose 를 모른다
+    (기능 e, context/stage.py::remember_purpose_stage 가 input 경로 끝에서
+    세션에 기록해둔 값).
     """
     if ctx.direction != "output" or not ctx.turns:
         return ctx
+    purpose = get_last_purpose(ctx.session_id)
     turn = ctx.turns[0]
-    turn.text = vault.detokenize_text(ctx.session_id, turn.text, ctx.role, ctx.purpose)
+    turn.text = vault.detokenize_text(ctx.session_id, turn.text, ctx.role, purpose)
     return ctx
 
 
