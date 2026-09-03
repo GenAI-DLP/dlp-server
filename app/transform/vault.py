@@ -15,7 +15,6 @@ import hashlib
 import logging
 import os
 import re
-import uuid
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from psycopg import Connection
@@ -24,30 +23,15 @@ from psycopg.types.json import Jsonb
 
 from app import db
 from app.config import load_config
+from app.ids import coerce_session_uuid
 
 logger = logging.getLogger(__name__)
 
-# token_vault.session_id (및 token_vault_access_log.session_id) 는 DB 스키마상
-# UUID 타입이다(postgres-schema.sql — 이 파일에선 직접 안 보임, 실제 INSERT 시
-# psycopg.errors.InvalidTextRepresentation 으로 확인됨). 반면 실제 session_id 는
-# 프록시가 헤더/쿠키/원격주소에서 뽑은 임의 문자열이라(§2.3) UUID 형식이 보장
-# 안 된다. 문자열을 결정론적으로 UUID 로 매핑해 스키마 제약을 만족시킨다 —
-# 같은 session_id 문자열은 항상 같은 UUID 로 매핑되므로 조회/삽입 일관성은
-# 유지된다(uuid5 는 순수 함수, 매 호출 재계산해도 결과 동일 — 별도 캐시 불필요).
-#
-# ⚠️ 이 매핑은 이 모듈(vault.py) 안에서만 유효하다. 세션 컨텍스트 테이블
-# (sessions, session_entities — context/store.py 가 PostgreSQL 백엔드로 바뀔 때
-# 쓸 것으로 보이는 테이블, §7.3 미정)이나 로그 테이블도 session_id 를 UUID 로
-# 저장한다면 거기서도 이 함수와 동일한 네임스페이스·알고리즘을 써야 서로 대조
-# (JOIN 등)할 수 있다. 근본적으로는 스키마를 session_id TEXT 로 바꾸는 게 더
-# 간단한 해결책일 수 있다 — 스키마 담당자와 논의 필요, 여기서는 애플리케이션
-# 레벨 우회로만 처리한다.
-_SESSION_UUID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # 표준 URL 네임스페이스
-
-
-def _session_uuid(session_id: str) -> str:
-    """임의의 session_id 문자열 → 결정론적 UUID 문자열 (DB의 UUID 컬럼용)."""
-    return str(uuid.uuid5(_SESSION_UUID_NAMESPACE, session_id))
+# token_vault(.session_id) / token_vault_access_log(.session_id) 컬럼은 UUID 타입인데
+# 실제 session_id 는 프록시가 뽑은 임의 문자열(§2.3)이라, 저장 계층 공용
+# coerce_session_uuid(app/ids.py)로 결정론적 UUID 로 매핑해 넣는다. 같은 헬퍼를
+# 감사 로그(log_events)도 써서 두 테이블의 session_id 가 대조(JOIN) 가능하다.
+# 세션 스토어(§7.3 미정)가 PostgreSQL 로 확정되면 이 우회를 재검토한다.
 
 
 # 정상 입력으로 인정하는 entity_type. 밖의 값은 "UNKNOWN" 으로 폴백한다.
@@ -93,7 +77,7 @@ def tokenize(
     vhash = _hash(session_id, etype, value)
     scope = access_scope if access_scope is not None else {"roles": [], "purposes": []}
     ttl_sec = load_config().vault_ttl_sec
-    db_session_id = _session_uuid(session_id)  # UUID 컬럼용 — advisory lock 키는 원본 문자열 유지
+    db_session_id = coerce_session_uuid(session_id)  # UUID 컬럼용 (advisory lock 키는 원본 유지)
 
     with db.connection() as conn, conn.transaction():
         existing = conn.execute(
@@ -156,7 +140,7 @@ def detokenize(
                     "(expires_at <= now()) AS is_expired "
                     "FROM token_vault "
                     "WHERE session_id = %s AND token_label = %s AND revoked_at IS NULL",
-                    (_session_uuid(session_id), token_label),
+                    (coerce_session_uuid(session_id), token_label),
                 )
                 row = cur.fetchone()
 
@@ -270,7 +254,7 @@ def revoke_session(session_id: str) -> None:
             conn.execute(
                 "UPDATE token_vault SET revoked_at = now() "
                 "WHERE session_id = %s AND revoked_at IS NULL",
-                (_session_uuid(session_id),),
+                (coerce_session_uuid(session_id),),
             )
     except Exception:
         logger.exception("revoke_session 실패 — session=%s", session_id)
@@ -333,9 +317,8 @@ def _log_access(
 ) -> None:
     """복원 시도 1건 기록. 원문·평문·value_hash 는 넣지 않는다. role 없으면 "" (NOT NULL).
 
-    token_vault_access_log.session_id 도 token_vault 와 같은 스키마 계열(UUID 타입)
-    이라고 가정하고 _session_uuid() 로 변환한다 — 실제 컬럼 타입이 다르면(예: TEXT)
-    이 변환은 불필요하니 스키마 확인 후 제거해도 된다.
+    token_vault_access_log.session_id 도 UUID 타입이라 coerce_session_uuid() 로 변환한다
+    — 스키마가 TEXT 로 바뀌면 이 변환은 불필요해진다.
     """
     conn.execute(
         "INSERT INTO token_vault_access_log "
@@ -344,7 +327,7 @@ def _log_access(
         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
         (
             token_id,
-            _session_uuid(session_id),
+            coerce_session_uuid(session_id),
             token_label,
             role or "",
             purpose,

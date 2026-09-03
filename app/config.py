@@ -102,11 +102,13 @@ class Config(BaseSettings):
         extra="ignore",
     )
 
-    fail_action: str = "block"
-    soft_budget_sec: float = 2.5
-    session_ttl_sec: int = 1800
-    vault_ttl_sec: int = 1800
-    log_path: str = "log_events.jsonl"
+    # DLP 내부 예외 시 반환할 판정. 기본 block, 시연 안정용 allow 스위치.
+    fail_action: str = "block"  # block | allow  (DLP_FAIL_ACTION)
+    soft_budget_sec: float = 2.5  # 프록시 deadline 3s 대비 내부 예산
+    session_ttl_sec: int = 1800  # 세션 컨텍스트 TTL
+    vault_ttl_sec: int = 1800  # 토큰 볼트 TTL (세션과 수명 분리)
+    log_sink: str = "pg"  # pg | jsonl | both — 감사 로그 sink (DLP_LOG_SINK)
+    log_path: str = "log_events.jsonl"  # JSONL sink / PG 폴백 경로 (DLP_LOG_PATH)
 
     db: DbConfig = Field(default_factory=DbConfig)
     vault: VaultConfig = Field(default_factory=VaultConfig)
@@ -146,5 +148,8 @@ def load_config(path: str | Path | None = None) -> Config:
 
     if cfg.fail_action not in ("block", "allow"):
         raise ValueError(f"fail_action 은 block|allow 여야 함: {cfg.fail_action!r}")
+
+    if cfg.log_sink not in ("pg", "jsonl", "both"):
+        raise ValueError(f"log_sink 은 pg|jsonl|both 여야 함: {cfg.log_sink!r}")
 
     return cfg

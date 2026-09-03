@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from app.ids import coerce_session_uuid
 from app.transform import vault
 
 _TEST_KEY = base64.b64encode(bytes(range(32))).decode()
@@ -59,7 +60,7 @@ def test_deterministic_reuse(db):
         _scalar(
             db,
             "SELECT count(*) FROM token_vault WHERE session_id = %s",
-            vault._session_uuid(_S1),
+            coerce_session_uuid(_S1),
         )
         == 1
     )
@@ -237,7 +238,7 @@ def test_concurrent_same_value_single_row(db):
         _scalar(
             db,
             "SELECT count(*) FROM token_vault WHERE session_id = %s",
-            vault._session_uuid(_S1),
+            coerce_session_uuid(_S1),
         )
         == 1
     )

@@ -1,9 +1,13 @@
 fail_action: block
 soft_budget_sec: 2.5
 
-session_ttl_sec: 1800
-vault_ttl_sec: 1800
-log_path: log_events.jsonl
+fail_action: block        # block | allow — DLP 내부 예외 시 반환할 판정 (시연용 스위치)
+soft_budget_sec: 2.5      # 프록시 deadline 3s 대비 내부 처리 예산
+
+session_ttl_sec: 1800     # 세션 컨텍스트 TTL (초)
+vault_ttl_sec: 1800       # 토큰 볼트 TTL (초) — 세션과 수명 분리
+log_sink: pg              # pg | jsonl | both — 감사 로그 sink (DLP_LOG_SINK)
+log_path: log_events.jsonl  # JSONL sink / PG 폴백 경로 (DLP_LOG_PATH 로 오버라이드)
 
 db:
   dsn: postgresql://dlp:dlp@localhost:5432/dlp
