@@ -23,6 +23,7 @@ main.py와 동일하게 config.yaml 값으로 NER 엔진을 preload한 뒤 실�
 데이터셋이 채워진 뒤에 별도로 만든다 — 이 스크립트는 그 전 단계의
 빠른 수동 확인용.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -49,6 +50,7 @@ get_ner_engine(
     threshold=cfg.detect.ner_threshold,
 ).preload()
 print("[*] 워밍업 완료\n")
+
 
 def load_dataset(path: Path) -> list[dict]:
     rows = []
@@ -95,8 +97,10 @@ def main() -> None:
     # ---- 요약 ----
     total = len(rows)
     n_flagged = len(flagged)
-    print(f"\n총 {total}건 중 {n_flagged}건에서 스팬 탐지됨 "
-          f"(benign 데이터셋이므로 이 {n_flagged}건이 오탐 후보)\n")
+    print(
+        f"\n총 {total}건 중 {n_flagged}건에서 스팬 탐지됨 "
+        f"(benign 데이터셋이므로 이 {n_flagged}건이 오탐 후보)\n"
+    )
 
     if not flagged:
         print("전부 빈 결과 — 이번 threshold/라벨 조합에서는 오탐 없음.")
@@ -107,7 +111,7 @@ def main() -> None:
                 print(f"  note: {row['notes']}")
             for s in sorted(spans, key=lambda x: x.start):
                 print(
-                    f"  -> [{s.type}] \"{s.value}\" ({s.start}-{s.end}) "
+                    f'  -> [{s.type}] "{s.value}" ({s.start}-{s.end}) '
                     f"conf={s.confidence:.2f} source={s.source}"
                 )
             print()
