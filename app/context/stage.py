@@ -46,7 +46,6 @@ import logging
 from app.context.accumulator import AccumulatorConfig, accumulate, from_app_config
 from app.context.store import InMemorySessionStore, SessionState, SessionStore
 from app.models import AnalysisContext, Span
-from app.transform import vault
 
 logger = logging.getLogger(__name__)
 
@@ -77,22 +76,16 @@ def _get_store() -> SessionStore:
 
 
 def _default_on_expire(state: SessionState) -> None:
-    """세션 만료 시 기본 훅 — 해당 세션의 vault 레코드를 조기 soft revoke 한다.
-
-    vault.py::revoke_session 참고 — 세션과 볼트는 원래 수명이 분리돼 있지만,
-    세션이 볼트보다 먼저 끝나면 거기 딸린 토큰을 계속 살려둘 이유가 없다는
-    판단으로 추가한 트리거다. vault 자체의 정기 purge_expired() 스케줄과는
-    독립적으로 동작한다.
-
-    이 훅은 configure() 로 store 를 직접 주입하지 않고 _get_store() 의 기본값
-    (InMemorySessionStore lazy 생성)을 쓸 때만 적용된다 — 테스트에서
-    InMemorySessionStore() 를 직접 만들어 쓰면 이 훅이 안 붙으니 vault 연동
-    없이 순수하게 세션 로직만 검증할 수 있다.
-    """
+    """세션 만료 시 기본 훅 — 해당 세션의 vault 레코드를 조기 soft revoke 한다."""
     try:
+        from app.transform import vault
+
         vault.revoke_session(state.session_id)
     except Exception:
-        logger.exception("session 만료 훅에서 vault revoke 실패 — session=%s", state.session_id)
+        logger.exception(
+            "session 만료 훅에서 vault revoke 실패 — session=%s",
+            state.session_id,
+        )
 
 
 def _get_accumulator_config() -> AccumulatorConfig:

@@ -25,7 +25,7 @@ import random
 import re
 from datetime import datetime
 
-from app.context import get_last_purpose
+from app.context.stage import get_last_purpose
 from app.models import AnalysisContext, Span
 from app.transform import vault
 
@@ -35,6 +35,16 @@ _REDACT_TEXT = "[삭제됨]"
 _MASK_KEEP_LAST_N = 4  # PHONE/ACCOUNT/CARD 마스킹 시 뒤에 남길 자릿수
 
 _FAKE_NAMES = ("김도윤", "이하은", "박서준", "최지우", "정민재", "한소율", "윤지호", "임서아")
+
+
+def apply_transforms(ctx: AnalysisContext) -> AnalysisContext:
+    """ctx.span_actions에 따라 현재 턴의 텍스트를 변환한다."""
+    return transform_stage(ctx)
+
+
+def mask_preview(span: Span) -> str:
+    """Span 하나의 값을 원문 노출 없이 마스킹한 미리보기로 반환한다."""
+    return _mask(span)
 
 
 # ---------------------------------------------------------------------------
