@@ -28,6 +28,8 @@ import logging
 import time
 from collections.abc import Callable
 
+from app.transform.apply import mask_preview
+
 from .adapters import select_adapter
 from .config import Config, load_config
 from .context import (
