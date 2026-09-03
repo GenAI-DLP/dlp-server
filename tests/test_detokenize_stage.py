@@ -23,9 +23,7 @@ def test_detokenize_stage_calls_vault_with_ctx_fields():
         return_value="카드번호는 4111-1111-1111-1111 입니다",
     ) as mock_dt:
         detokenize_stage(ctx)
-    mock_dt.assert_called_once_with(
-        "sess_1", "카드번호는 <PII:CARD:1> 입니다", "agent_l1", None
-    )
+    mock_dt.assert_called_once_with("sess_1", "카드번호는 <PII:CARD:1> 입니다", "agent_l1", None)
     assert ctx.turns[0].text == "카드번호는 4111-1111-1111-1111 입니다"
 
 
