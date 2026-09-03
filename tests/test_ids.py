@@ -28,3 +28,9 @@ def test_distinct_inputs_distinct_uuids():
 
 def test_return_type_is_uuid():
     assert isinstance(coerce_session_uuid("10.1.2.3:52344"), uuid.UUID)
+
+
+def test_handles_arbitrary_strings():
+    """프록시가 뽑는 임의 문자열(빈 값·IP·이메일·이모지·초장문)도 에러 없이 UUID 로."""
+    for sid in ("", "192.168.0.1", "user@example.com", "🙂-session", "a" * 500):
+        assert isinstance(coerce_session_uuid(sid), uuid.UUID)
