@@ -145,13 +145,33 @@ python -m app.main
 ```
 
 - gRPC 서버: `0.0.0.0:50051` — `DLPInspector.Inspect` (unary)
-- FastAPI:   `0.0.0.0:8000` — `GET /health`
+- FastAPI:   `0.0.0.0:8000` — `GET /health`, `GET /events`, `GET /events/{session_id}`,
+  `GET /stats`, `GET /vault-access` (읽기 전용, 대시보드용)
 
 동작 확인:
 
 ```bash
-curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down" → DB 미기동/스키마 미적용)
+curl http://localhost:8000/health              # {"status":"ok","db":"ok"}
+curl "http://localhost:8000/events?limit=5"    # 감사 로그 최신순 (KST)
+curl "http://localhost:8000/stats?window=1h"   # verdict·latency·엔티티 집계
 ```
+
+읽기 API 는 `DLP_LOG_SINK=pg`(기본값) 전제 — JSONL sink 면 `/events` 가 빈 배열이다.
+
+### 대시보드 데이터 시더
+
+대시보드가 빈 화면이면 시연이 안 되므로, 대표 시나리오(allow / transform / block /
+injection / 멀티턴 / detokenize)를 파이프라인에 흘려 `log_events` 를 채운다.
+
+```bash
+# 순서: 스키마 적용 → 정책 시드 → (서버 없이) 시더
+python scripts/apply_schema.py
+python scripts/seed_policy.py
+python scripts/demo_seed.py --reset
+```
+
+`--reset` 은 기존 `demo-*` 세션 로그·볼트를 지우고 다시 채운다. `--no-ner` 로 NER
+워밍업을 건너뛸 수 있으나, 멀티턴 누적 위험도 시나리오는 NER 이 있어야 3턴째 `block` 이 된다.
 
 ## 설정
 
@@ -166,6 +186,7 @@ curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down"
 | `DLP_FAIL_ACTION` | `block`(기본) \| `allow` — 내부 예외 시 반환할 판정 (시연 안정용) |
 | `DLP_GUARDRAIL__INJECTION_THRESHOLD` | Input Guard(기능 c 입력) hit 판정 임계 0~1 (기본 `0.7`). 매칭된 규칙 score 가 이 값 이상이면 `block` |
 | `DLP_GRPC__PORT` | gRPC 포트 (기본 `50051`) |
+| `DLP_API__CORS_ORIGINS` | 읽기 API CORS 허용 오리진, JSON 배열 (기본 `["*"]`). 예: `["http://localhost:8501"]` |
 | `DLP_LOG_SINK` | 감사 로그 sink — `pg`(기본) \| `jsonl` \| `both`. `pg` 실패 시 JSONL 로 폴백 |
 | `DLP_LOG_PATH` | JSONL sink / PG 폴백 파일 경로 |
 | `DLP_CONFIG` | 설정 파일(yaml) 경로 |
