@@ -1,22 +1,10 @@
 """tests/test_detect_integration.py — regex_rules + dictionary + merge 통합 테스트.
 
-detect 패키지에 아직 pipeline.py 오케스트레이터가 없어서, 여기서는
-"세 레이어를 이어붙이면 실제로 뭐가 나오는가"를 검증한다.
-나중에 app/detect/__init__.py 나 app/pipeline.py 에 orchestrator 함수가
-생기면 그걸 직접 호출하는 테스트로 대체해도 된다.
+app.detect.detect() 가 정식 orchestrator 이므로 이제 그걸 직접 사용한다.
+(예전엔 orchestrator 가 없어서 이 파일 안에 임시 헬퍼를 뒀었음 — 제거함)
 """
 
-from app.detect.dictionary import detect as dict_detect
-from app.detect.merge import merge_spans
-from app.detect.regex_rules import detect as regex_detect
-
-
-def run_pipeline(text: str, dict_automaton=None) -> list:
-    """세 레이어를 순서대로 돌리고 병합한 결과를 반환하는 임시 헬퍼."""
-    spans = []
-    spans += regex_detect(text)
-    spans += dict_detect(text, automaton=dict_automaton)
-    return merge_spans(spans)
+from app.detect import detect as run_pipeline
 
 
 def test_mixed_regex_and_dict_hits_in_one_text():
