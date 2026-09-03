@@ -32,6 +32,7 @@ from .adapters import select_adapter
 from .config import Config, load_config
 from .context import (
     multiturn_stage,  # [4] 멀티턴 누적 (e) — docs/spec/dlp-server/multiturn-context.md
+    remember_purpose_stage,  # 세션에 purpose 기록 — output detokenize_stage 가 조회
 )
 from .detect import pii_detect_stage
 from .guardrail.injection import injection_guard
@@ -53,12 +54,14 @@ Stage = Callable[[AnalysisContext], AnalysisContext]
 #                              (탐지 결과를 세션에 누적) — multiturn_stage 로 배선됨
 #   [5] 목적+정책 (f)       : ctx.purpose / ctx.span_actions 채움.
 #                              block action 이면 ctx.blocked
+#         └ remember_purpose_stage : ctx.purpose 를 세션에 기록 (output 경로가 조회)
 #   [6] 변환+토큰화 (g, a)  : ctx.turns[*].text 갱신
 _INPUT_STAGES: list[Stage] = [
     injection_guard,
     pii_detect_stage,
     multiturn_stage,
     purpose_policy_stage,
+    remember_purpose_stage,
     transform_stage,
 ]
 # 출력: [2] detokenize (a) — 배선됨 / [3] Output Guard (c) — 다른 담당자 작업 중, 미배선
