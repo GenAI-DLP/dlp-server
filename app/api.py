@@ -5,6 +5,8 @@ FastAPI 앱 — 얇은 어댑터.
     GET /health                 — 헬스체크 (DB 포함)
     GET /events                 — 감사 로그 최신순 조회 (대시보드 tail)
     GET /events/{session_id}    — 세션 타임라인 (input→output)
+    GET /stats                  — window 별 집계 (대시보드 KPI·차트)
+    GET /vault-access           — 토큰 복원 시도 감사 조회
 
 모든 읽기 라우트는 읽기 전용 SELECT 만 수행하며 ``db.connection()`` 을 재사용한다.
 ``session_id`` 는 wire 문자열/UUID 아무거나 받아 ``coerce_session_uuid`` 로 정규화한다
@@ -17,6 +19,7 @@ FastAPI 앱 — 얇은 어댑터.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query
@@ -30,6 +33,8 @@ from .ids import coerce_session_uuid
 _DIRECTIONS = ("input", "output")
 _VERDICTS = ("allow", "block", "transform")
 _EVENTS_LIMIT_MAX = 500
+_VAULT_LIMIT_MAX = 500
+_STATS_TOP_N = 10
 _KST = timezone(timedelta(hours=9), "KST")  # 한국은 DST 없음 → 고정 오프셋
 
 # log_events 조회 컬럼 (created_at 은 마지막). reason 은 목록에서 접었다가
@@ -48,6 +53,34 @@ def _parse_since(since: str) -> datetime:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="since 는 ISO 8601 타임스탬프여야 함") from exc
     return ts.replace(tzinfo=_KST) if ts.tzinfo is None else ts
+
+
+def _parse_window(window: str) -> int:
+    """``15m`` / ``2h`` → 분(int). 실패 시 422."""
+    m = re.fullmatch(r"(\d+)([mh])", window.strip())
+    if not m or int(m.group(1)) == 0:
+        raise HTTPException(status_code=422, detail="window 은 예: 15m, 1h")
+    n = int(m.group(1))
+    return n if m.group(2) == "m" else n * 60
+
+
+def _kst_iso(dt: datetime | None) -> str | None:
+    return dt.astimezone(_KST).isoformat() if dt else None
+
+
+def _run(sql: str, params: list | tuple) -> list[dict]:
+    with db.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        cur.execute(sql, params)
+        return cur.fetchall()
+
+
+def _json_array_elems(col: str) -> str:
+    """JSONB 배열이 아닌 과거 행을 만나도 깨지지 않게 감싼 ``jsonb_array_elements`` 소스."""
+    return (
+        f"jsonb_array_elements("
+        f"CASE WHEN jsonb_typeof({col}) = 'array' THEN {col} ELSE '[]'::jsonb END)"
+    )
 
 
 def _serialize_event(row: dict, *, include_reason: bool = False) -> dict:
@@ -167,6 +200,114 @@ def create_app(config: Config | None = None) -> FastAPI:
             limit=None,
         )
         return [_serialize_event(r, include_reason=True) for r in rows]
+
+    @app.get("/stats")
+    def stats(window: str = Query("1h")) -> dict:
+        """최근 ``window`` 구간 집계. 대시보드 KPI·차트가 소비한다.
+
+        fail_policy_applied 행(장애 대응)은 verdict 카운트에 그대로 포함되며
+        ``fail_closed`` 로 따로 노출한다.
+        """
+        minutes = _parse_window(window)
+        since = datetime.now(_KST) - timedelta(minutes=minutes)
+        bucket = "minute" if minutes <= 120 else "hour"
+
+        summary = _run(
+            "SELECT "
+            "count(*) AS events, "
+            "count(DISTINCT session_id) AS sessions, "
+            "count(*) FILTER (WHERE direction = 'input') AS input, "
+            "count(*) FILTER (WHERE direction = 'output') AS output, "
+            "count(*) FILTER (WHERE verdict_action = 'allow') AS allow, "
+            "count(*) FILTER (WHERE verdict_action = 'block') AS block, "
+            "count(*) FILTER (WHERE verdict_action = 'transform') AS transform, "
+            "count(*) FILTER (WHERE jsonb_typeof(guardrail_hits) = 'array' "
+            "AND jsonb_array_length(guardrail_hits) > 0) AS guardrail_hits, "
+            "count(*) FILTER (WHERE fail_policy_applied) AS fail_closed, "
+            "coalesce(avg(latency_ms), 0) AS latency_avg, "
+            "coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0) AS latency_p95 "
+            "FROM log_events WHERE created_at >= %s",
+            [since],
+        )[0]
+
+        by_purpose = _run(
+            "SELECT coalesce(purpose, '(none)') AS purpose, count(*) AS count "
+            "FROM log_events WHERE created_at >= %s GROUP BY 1 ORDER BY 2 DESC",
+            [since],
+        )
+        by_entity_type = _run(
+            f"SELECT e->>'type' AS type, count(*) AS count "
+            f"FROM log_events, {_json_array_elems('entities_summary')} AS e "
+            f"WHERE created_at >= %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %s",
+            [since, _STATS_TOP_N],
+        )
+        by_action = _run(
+            f"SELECT e->>'action' AS action, count(*) AS count "
+            f"FROM log_events, {_json_array_elems('transforms')} AS e "
+            f"WHERE created_at >= %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT %s",
+            [since, _STATS_TOP_N],
+        )
+        buckets = _run(
+            "SELECT date_trunc(%s, created_at) AS ts, "
+            "count(*) FILTER (WHERE verdict_action = 'allow') AS allow, "
+            "count(*) FILTER (WHERE verdict_action = 'block') AS block, "
+            "count(*) FILTER (WHERE verdict_action = 'transform') AS transform "
+            "FROM log_events WHERE created_at >= %s GROUP BY 1 ORDER BY 1",
+            [bucket, since],
+        )
+
+        return {
+            "window": window,
+            "generated_at": _kst_iso(datetime.now(_KST)),
+            "totals": {
+                "events": summary["events"],
+                "sessions": summary["sessions"],
+                "input": summary["input"],
+                "output": summary["output"],
+            },
+            "verdict": {
+                "allow": summary["allow"],
+                "block": summary["block"],
+                "transform": summary["transform"],
+            },
+            "guardrail_hits": summary["guardrail_hits"],
+            "fail_closed": summary["fail_closed"],
+            "latency_ms": {
+                "avg": round(float(summary["latency_avg"]), 1),
+                "p95": round(float(summary["latency_p95"]), 1),
+            },
+            "by_purpose": by_purpose,
+            "by_entity_type": by_entity_type,
+            "by_action": by_action,
+            "buckets": [
+                {
+                    "ts": _kst_iso(b["ts"]),
+                    "allow": b["allow"],
+                    "block": b["block"],
+                    "transform": b["transform"],
+                }
+                for b in buckets
+            ],
+        }
+
+    @app.get("/vault-access")
+    def vault_access(
+        session_id: str = Query(...),
+        limit: int = Query(100, ge=1),
+    ) -> list[dict]:
+        """세션의 토큰 복원 시도 감사(``token_vault_access_log``). granted=false = 인가 실패."""
+        rows = _run(
+            "SELECT access_id, token_id, session_id, token_label, requested_role, "
+            "requested_purpose, granted, denied_reason, accessed_at "
+            "FROM token_vault_access_log WHERE session_id = %s "
+            "ORDER BY accessed_at DESC LIMIT %s",
+            [str(coerce_session_uuid(session_id)), min(limit, _VAULT_LIMIT_MAX)],
+        )
+        for r in rows:
+            r["token_id"] = str(r["token_id"])
+            r["session_id"] = str(r["session_id"])
+            r["accessed_at"] = _kst_iso(r["accessed_at"])
+        return rows
 
     return app
 

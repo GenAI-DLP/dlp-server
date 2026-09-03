@@ -5,6 +5,7 @@ PostgreSQL 이 붙어 있고 스키마가 적용됐을 때만 돈다(`db` fixtur
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -158,3 +159,125 @@ def test_events_rejects_bad_params(client, db):
     assert client.get("/events", params={"direction": "sideways"}).status_code == 422
     assert client.get("/events", params={"since": "not-a-date"}).status_code == 422
     assert client.get("/events", params={"limit": 0}).status_code == 422
+
+
+# --- /stats ---------------------------------------------------------------
+
+
+def test_stats_counts(client, db):
+    _insert(db, session_id="a", verdict="allow")
+    _insert(db, session_id="a", verdict="allow", direction="output")
+    _insert(db, session_id="b", verdict="block", guardrail=[{"type": "injection"}])
+    _insert(db, session_id="c", verdict="transform")
+    _insert(db, session_id="d", verdict="block", fail=True, reason_extra={"stage": "pipeline"})
+
+    s = client.get("/stats", params={"window": "24h"}).json()
+
+    assert s["totals"] == {"events": 5, "sessions": 4, "input": 4, "output": 1}
+    assert s["verdict"] == {"allow": 2, "block": 2, "transform": 1}
+    assert s["guardrail_hits"] == 1
+    assert s["fail_closed"] == 1
+
+
+def test_stats_latency_p95(client, db):
+    for ms in (10, 20, 30, 40, 100):
+        _insert(db, session_id=f"s{ms}", latency_ms=ms)
+    s = client.get("/stats", params={"window": "24h"}).json()
+    # percentile_cont(0.95) over [10,20,30,40,100] → 40 + 0.8*(100-40) = 88.0
+    assert s["latency_ms"]["p95"] == 88.0
+    assert s["latency_ms"]["avg"] == 40.0
+
+
+def test_stats_by_entity_and_action(client, db):
+    _insert(
+        db,
+        session_id="s1",
+        verdict="transform",
+        transforms=[{"entity": "RRN", "action": "tokenize"}],
+        entities=[{"type": "RRN", "masked_preview": "8801**", "confidence": 0.9}],
+    )
+    _insert(
+        db,
+        session_id="s2",
+        verdict="transform",
+        transforms=[{"entity": "RRN", "action": "tokenize"}, {"entity": "PHONE", "action": "mask"}],
+        entities=[{"type": "RRN", "masked_preview": "9002**", "confidence": 0.8}],
+    )
+    s = client.get("/stats", params={"window": "24h"}).json()
+
+    assert {row["type"]: row["count"] for row in s["by_entity_type"]} == {"RRN": 2}
+    assert {row["action"]: row["count"] for row in s["by_action"]} == {"tokenize": 2, "mask": 1}
+
+
+def test_stats_buckets_sum_matches_events(client, db):
+    for i in range(4):
+        _insert(db, session_id=f"s{i}", verdict="allow" if i else "block")
+    s = client.get("/stats", params={"window": "24h"}).json()
+
+    assert s["buckets"]
+    total = sum(b["allow"] + b["block"] + b["transform"] for b in s["buckets"])
+    assert total == s["totals"]["events"] == 4
+    assert s["buckets"][0]["ts"].endswith("+09:00")
+
+
+def test_stats_rejects_bad_window(client, db):
+    assert client.get("/stats", params={"window": "1d"}).status_code == 422
+    assert client.get("/stats", params={"window": "0h"}).status_code == 422
+    assert client.get("/stats", params={"window": "abc"}).status_code == 422
+
+
+# --- /vault-access ------------------------------------------------------------
+
+
+def _insert_vault_access(
+    db_mod,
+    *,
+    session_id: str,
+    token_label: str = "<PII:RRN:1>",
+    requested_role: str = "agent_l1",
+    requested_purpose: str | None = "doc_summarize",
+    granted: bool = True,
+    denied_reason: str | None = None,
+    accessed_at: datetime | None = None,
+) -> None:
+    with db_mod.connection() as conn:
+        conn.execute(
+            "INSERT INTO token_vault_access_log (token_id, session_id, token_label, "
+            "requested_role, requested_purpose, granted, denied_reason, accessed_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s, COALESCE(%s, now()))",
+            (
+                str(uuid.uuid4()),
+                str(coerce_session_uuid(session_id)),
+                token_label,
+                requested_role,
+                requested_purpose,
+                granted,
+                denied_reason,
+                accessed_at,
+            ),
+        )
+
+
+def test_vault_access_latest_first_with_denied_flag(client, db):
+    base = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    _insert_vault_access(db, session_id="sess", granted=True, accessed_at=base)
+    _insert_vault_access(
+        db,
+        session_id="sess",
+        granted=False,
+        denied_reason="purpose_mismatch",
+        accessed_at=base + timedelta(minutes=1),
+    )
+    _insert_vault_access(db, session_id="other", granted=True, accessed_at=base)
+
+    rows = client.get("/vault-access", params={"session_id": "sess"}).json()
+
+    assert len(rows) == 2
+    assert rows[0]["granted"] is False
+    assert rows[0]["denied_reason"] == "purpose_mismatch"
+    assert rows[0]["accessed_at"].endswith("+09:00")
+    assert all(isinstance(r["token_id"], str) for r in rows)
+
+
+def test_vault_access_requires_session_id(client, db):
+    assert client.get("/vault-access").status_code == 422
