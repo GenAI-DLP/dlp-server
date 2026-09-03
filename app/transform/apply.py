@@ -1,10 +1,19 @@
 """
-동적 데이터 변환 (기능 g) — 입력 파이프라인 [6] 스테이지.
+transform/apply.py — 동적 데이터 변환 (기능 g). ctx.span_actions 를 실행해
+ctx.turns[*].text 를 갱신하는 파이프라인 [6] 스테이지.
 
-정책(f)이 span 마다 정한 조치(mask/redact/tokenize/keep)를
-마지막 user 턴에 적용한다.
-tokenize 는 볼트(a) 호출, access_scope 는 요청 role·목적으로 조립.
-변환 중 오류는 fail-closed(ctx.blocked)
+정책 엔진(f)이 채운 (Span, action) 목록을 소비하는 실행 계층이다. 같은 PII 타입도
+action 에 따라 다르게 처리되는 게 핵심 — 정적 마스킹 규칙표가 아니다.
+
+action 별 처리:
+    keep       원본 유지
+    mask       비가역 부분 마스킹 (타입별 규칙, §아래 _mask 참고)
+    generalize 범주로 일반화 — 현재 RRN 만 구현(<AGE:x대><SEX:y>), 그 외는 mask 로 폴백
+    aggregate  같은 턴의 aggregate 대상 span 전부를 모아 합계/평균으로 치환 (개별 span 아님)
+    tokenize   transform/vault.py 위임 — DB 필요
+    synthetic  형식이 같은 무작위 값 (이름은 이름 풀, 나머지는 자릿수 유지한 무작위 숫자)
+    redact     "[삭제됨]" 으로 완전 치환
+    block      여기 도달 안 함 — purpose_policy_stage 가 이미 ctx.blocked 로 조기 차단
 
 근거: docs/architecture/dlp-server-architecture.md §6-g
 """
@@ -12,132 +21,259 @@ tokenize 는 볼트(a) 호출, access_scope 는 요청 role·목적으로 조립
 from __future__ import annotations
 
 import logging
+import random
 import re
-from collections.abc import Callable
+from datetime import datetime
 
-from app.models import AnalysisContext, Span, Turn
-from app.transform.vault import tokenize
+from app.context.stage import get_last_purpose
+from app.models import AnalysisContext, Span
+from app.transform import vault
 
 logger = logging.getLogger(__name__)
 
-_REDACTED = "[삭제됨]"
+_REDACT_TEXT = "[삭제됨]"
+_MASK_KEEP_LAST_N = 4  # PHONE/ACCOUNT/CARD 마스킹 시 뒤에 남길 자릿수
 
-# 조치를 실제로 실행하지 않는 값 (치환 스킵)
-_NOOP_ACTIONS = frozenset({"keep", "block"})
-
-
-# ---------------------------------------------------------------------------
-# 타입별 마스킹
-# ---------------------------------------------------------------------------
-def _mask_rrn(value: str) -> str:
-    head, sep, tail = value.partition("-")
-    if sep:
-        return f"{head}-{'*' * len(tail)}"
-    return value[:6] + "*" * max(len(value) - 6, 0)
+_FAKE_NAMES = ("김도윤", "이하은", "박서준", "최지우", "정민재", "한소율", "윤지호", "임서아")
 
 
-def _mask_keep_last4(value: str) -> str:
-    """뒤 4자리만 남기고 나머지 숫자를 가린다 (카드번호). 구분자는 보존."""
-    return re.sub(r"\d(?=(?:\D*\d){4})", "*", value)
-
-
-def _mask_phone(value: str) -> str:
-    parts = value.split("-")
-    if len(parts) == 3:
-        parts[1] = "*" * len(parts[1])
-        return "-".join(parts)
-    return _mask_keep_last4(value)
-
-
-def _mask_email(value: str) -> str:
-    local, at, domain = value.partition("@")
-    if not at or not local:
-        return "*" * len(value)
-    return f"{local[0]}***{at}{domain}"
-
-
-def _mask_name(value: str) -> str:
-    if len(value) <= 1:
-        return "*"
-    if len(value) == 2:
-        return value[0] + "*"
-    return value[0] + "*" * (len(value) - 2) + value[-1]
-
-
-_MASKERS: dict[str, Callable[[str], str]] = {
-    "RRN": _mask_rrn,
-    "FOREIGN_RRN": _mask_rrn,
-    "CARD": _mask_keep_last4,
-    "ACCOUNT": _mask_keep_last4,
-    "PHONE": _mask_phone,
-    "EMAIL": _mask_email,
-    "NAME": _mask_name,
-}
-
-
-def _mask(entity_type: str, value: str) -> str:
-    """타입별 마스킹. 규칙이 없으면 값 전체를 `*` 로."""
-    masker = _MASKERS.get(entity_type)
-    if masker is None:
-        return "*" * len(value)
-    return masker(value)
+def apply_transforms(ctx: AnalysisContext) -> AnalysisContext:
+    """ctx.span_actions에 따라 현재 턴의 텍스트를 변환한다."""
+    return transform_stage(ctx)
 
 
 def mask_preview(span: Span) -> str:
-    """감사 로그 entities_summary 용 마스킹 미리보기 (원문 금지)."""
-    return _mask(span.type, span.value)
+    """Span 하나의 값을 원문 노출 없이 마스킹한 미리보기로 반환한다."""
+    return _mask(span)
 
 
 # ---------------------------------------------------------------------------
-# 조치 실행
+# 파이프라인 스테이지 — output 경로 [2] detokenize
+# ---------------------------------------------------------------------------
+def detokenize_stage(ctx: AnalysisContext) -> AnalysisContext:
+    """output 경로에서 응답 안의 <PII:TYPE:n> 토큰 라벨을 원본으로 복원한다.
+
+    vault.detokenize_text 는 access_scope(role/purpose) 를 통과 못 하면 라벨을
+    그대로 둔다 (fail-closed) — 여기서 추가로 예외 처리할 필요 없음.
+
+    ctx.purpose 는 context.get_last_purpose(session_id) 로 조회한다 — output
+    InspectRequest 는 원 input 요청과 별개 호출이라 자체적으로 purpose 를 모른다
+    (기능 e, context/stage.py::remember_purpose_stage 가 input 경로 끝에서
+    세션에 기록해둔 값).
+    """
+    if ctx.direction != "output" or not ctx.turns:
+        return ctx
+    purpose = get_last_purpose(ctx.session_id)
+    turn = ctx.turns[0]
+    turn.text = vault.detokenize_text(ctx.session_id, turn.text, ctx.role, purpose)
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# 파이프라인 스테이지 [6]
+# ---------------------------------------------------------------------------
+def transform_stage(ctx: AnalysisContext) -> AnalysisContext:
+    """ctx.span_actions 를 실행해 최신 턴(analyze_turn 이 분석한 턴)의 텍스트를 갱신한다.
+
+    aggregate 는 개별 span 치환이 아니라 그룹 처리라 별도로 분리한다.
+    나머지는 span.start/end 를 오른쪽부터(내림차순) 치환해서 앞쪽 오프셋이
+    안 틀어지게 한다.
+    """
+    if not ctx.span_actions or not ctx.turns:
+        return ctx
+
+    turn = ctx.turns[-1]
+    text = turn.text
+
+    per_span = [(s, a) for s, a in ctx.span_actions if a != "aggregate"]
+    aggregate_group = [(s, a) for s, a in ctx.span_actions if a == "aggregate"]
+
+    replacements: list[tuple[int, int, str]] = []
+    for span, action in per_span:
+        new_value = _render(action, ctx, span)
+        replacements.append((span.start, span.end, new_value))
+    for span, _ in aggregate_group:
+        replacements.append((span.start, span.end, ""))  # 자리 비우고 요약은 뒤에 덧붙임
+
+    for start, end, new_value in sorted(replacements, key=lambda r: r[0], reverse=True):
+        text = text[:start] + new_value + text[end:]
+
+    if aggregate_group:
+        text = _append_aggregate_summary(text, [s for s, _ in aggregate_group])
+
+    turn.text = text
+    return ctx
+
+
+def _render(action: str, ctx: AnalysisContext, span: Span) -> str:
+    if action == "keep":
+        return span.value
+    if action == "mask":
+        return _mask(span)
+    if action == "generalize":
+        return _generalize(span)
+    if action == "tokenize":
+        return _tokenize(ctx, span)
+    if action == "synthetic":
+        return _synthetic(span)
+    if action == "redact":
+        return _REDACT_TEXT
+    logger.warning("transform: 알 수 없는 action=%r (type=%s) — keep 으로 폴백", action, span.type)
+    return span.value
+
+
+# ---------------------------------------------------------------------------
+# tokenize — vault 위임
 # ---------------------------------------------------------------------------
 def _access_scope(ctx: AnalysisContext) -> dict:
-    """토큰 복원 허용 범위 — 요청 role·목적 기준 (정책 확장 시 규칙에서 가져옴)."""
+    """토큰 복원 허용 범위 — 요청 role·목적 기준
+
+    vault.tokenize 에 안 넘기면 볼트 기본값 {"roles": [], "purposes": []} 로 저장돼
+    아무도 복원 못 하는 토큰이 된다. role/purpose 가 없으면 "*" 로 완화.
+    출력 경로 detokenize_stage 가 같은 role + get_last_purpose() 로 조회하므로
+    스코프가 맞아떨어진다. MVP이며 추후 확장 예정.
+    """
     return {
         "roles": [ctx.role] if ctx.role else ["*"],
         "purposes": [ctx.purpose] if ctx.purpose else ["*"],
     }
 
 
-def _render(ctx: AnalysisContext, span: Span, action: str) -> str:
-    if action == "mask":
-        return _mask(span.type, span.value)
-    if action == "redact":
-        return _REDACTED
-    if action == "tokenize":
-        return tokenize(ctx.session_id, span.type, span.value, access_scope=_access_scope(ctx))
-    # generalize / aggregate / synthetic — MVP 미구현. 원문 노출 방지로 mask 폴백.
-    logger.warning("apply: 미구현 조치 %r — mask 로 폴백", action)
-    return _mask(span.type, span.value)
-
-
-def _last_user_turn_index(turns: list[Turn]) -> int | None:
-    for i in range(len(turns) - 1, -1, -1):
-        if turns[i].role == "user":
-            return i
-    return None
-
-
-def apply_transforms(ctx: AnalysisContext) -> AnalysisContext:
-    """`ctx.span_actions` 를 마지막 user 턴 텍스트에 적용한다.
-
-    span 을 start 역순(뒤→앞)으로 치환해 앞 span 의 offset 이 안 밀리게 한다.
-    오류는 fail-closed(block).
-    """
-    if ctx.direction != "input" or not ctx.span_actions:
-        return ctx
+def _tokenize(ctx: AnalysisContext, span: Span) -> str:
     try:
-        idx = _last_user_turn_index(ctx.turns)
-        if idx is None:
-            return ctx
-        text = ctx.turns[idx].text
-        for span, action in sorted(ctx.span_actions, key=lambda sa: sa[0].start, reverse=True):
-            if action in _NOOP_ACTIONS:
-                continue
-            text = text[: span.start] + _render(ctx, span, action) + text[span.end :]
-        ctx.turns[idx].text = text
+        return vault.tokenize(
+            ctx.session_id, span.type, span.value, access_scope=_access_scope(ctx)
+        )
     except Exception:
-        logger.exception("apply_transforms 실패 — fail-closed(block)")
-        ctx.blocked = True
-        ctx.block_reason = {"type": "transform", "note": "stage_error"}
-    return ctx
+        # tokenize 의 DB 오류는 vault.py 가 raise 하도록 설계돼 있음(fail-closed 원칙과
+        # 별개로, 볼트 실패로 원본이 그대로 나가면 안 되니 redact 로 대체).
+        logger.exception("transform: tokenize 실패 — redact 로 폴백 (type=%s)", span.type)
+        return _REDACT_TEXT
+
+
+# ---------------------------------------------------------------------------
+# mask
+# ---------------------------------------------------------------------------
+def _mask(span: Span) -> str:
+    t, v = span.type, span.value
+    if t == "RRN":
+        return _mask_rrn(v)
+    if t in ("CARD", "PHONE", "ACCOUNT"):
+        return _mask_keep_last_digits(v, keep=_MASK_KEEP_LAST_N)
+    if t == "EMAIL":
+        return _mask_email(v)
+    if t == "NAME":
+        return _mask_middle(v)
+    return _mask_generic(v)
+
+
+def _mask_rrn(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) != 13:
+        return _mask_generic(value)
+    return f"{digits[:6]}-{'*' * 7}"
+
+
+def _mask_keep_last_digits(value: str, *, keep: int) -> str:
+    digit_positions = [i for i, c in enumerate(value) if c.isdigit()]
+    if len(digit_positions) <= keep:
+        return value  # 자릿수가 keep 이하면 마스킹해도 의미 없어 원본 유지
+    keep_set = set(digit_positions[-keep:])
+    return "".join(c if (not c.isdigit() or i in keep_set) else "*" for i, c in enumerate(value))
+
+
+def _mask_email(value: str) -> str:
+    local, sep, domain = value.partition("@")
+    if not sep:
+        return _mask_generic(value)
+    return f"{_mask_middle(local)}@{domain}"
+
+
+def _mask_middle(value: str) -> str:
+    if len(value) <= 1:
+        return "*" * len(value)
+    if len(value) == 2:
+        return value[0] + "*"
+    return value[0] + "*" * (len(value) - 2) + value[-1]
+
+
+def _mask_generic(value: str) -> str:
+    return _mask_middle(value)
+
+
+# ---------------------------------------------------------------------------
+# generalize — 현재 RRN 만 규칙 있음, 나머지는 mask 로 안전하게 폴백
+# ---------------------------------------------------------------------------
+_GENDER_DIGIT_CENTURY = {
+    "1": (1900, "남"),
+    "2": (1900, "여"),
+    "3": (2000, "남"),
+    "4": (2000, "여"),
+    "5": (1800, "남"),
+    "6": (1800, "여"),
+}
+
+
+def _generalize(span: Span) -> str:
+    if span.type == "RRN":
+        result = _generalize_rrn(span.value)
+        if result is not None:
+            return result
+    logger.info("transform: type=%s 의 generalize 규칙 미정의 — mask 로 폴백", span.type)
+    return _mask(span)
+
+
+def _generalize_rrn(value: str) -> str | None:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) != 13:
+        return None
+    gender_digit = digits[6]
+    century_sex = _GENDER_DIGIT_CENTURY.get(gender_digit)
+    if century_sex is None:
+        return None
+    century, sex = century_sex
+    birth_year = century + int(digits[0:2])
+    age = datetime.now().year - birth_year
+    bracket = max((age // 10) * 10, 0)
+    return f"<AGE:{bracket}대><SEX:{sex}>"
+
+
+# ---------------------------------------------------------------------------
+# aggregate — 그룹 처리 (개별 span 치환이 아님)
+# ---------------------------------------------------------------------------
+def _parse_amount(value: str) -> float | None:
+    cleaned = re.sub(r"[^\d.]", "", value)
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _append_aggregate_summary(text: str, spans: list[Span]) -> str:
+    amounts = [a for a in (_parse_amount(s.value) for s in spans) if a is not None]
+    if not amounts:
+        return text
+    total = sum(amounts)
+    avg = total / len(amounts)
+    summary = f" [집계: 합계 {total:,.0f} / 평균 {avg:,.0f} / 건수 {len(amounts)}]"
+    return text.rstrip() + summary
+
+
+# ---------------------------------------------------------------------------
+# synthetic
+# ---------------------------------------------------------------------------
+def _synthetic(span: Span) -> str:
+    if span.type == "NAME":
+        return random.choice(_FAKE_NAMES)
+
+    if not any(c.isdigit() for c in span.value):
+        # 숫자가 없는 타입(현재 스펙엔 없지만 안전장치)은 합성할 형식 기준이 없어 mask 로 대체
+        return _mask(span)
+
+    chars = list(span.value)
+    for i, c in enumerate(chars):
+        if c.isdigit():
+            chars[i] = str(random.randint(0, 9))
+    return "".join(chars)

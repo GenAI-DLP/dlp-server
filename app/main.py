@@ -17,6 +17,7 @@ import uvicorn
 from . import db
 from .api import create_app
 from .config import load_config
+from .detect.ner import get_ner_engine
 from .grpc_server import create_server
 
 logging.basicConfig(
@@ -28,6 +29,17 @@ logger = logging.getLogger("app.main")
 
 def main() -> None:
     cfg = load_config()
+
+    # NER 모델 워밍업 — cfg.detect 값으로 구성해서 미리 로딩한다.
+    # 실패해도 부트스트랩을 막지 않는다: NER은 하이브리드 탐지의 세 레이어
+    # 중 하나일 뿐이고, 실패 시 이후 요청에서 다시 로딩을 시도한다.
+    try:
+        get_ner_engine(
+            model_name=cfg.detect.ner_model_name,
+            threshold=cfg.detect.ner_threshold,
+        ).preload()
+    except Exception:
+        logger.exception("NER 모델 워밍업 실패 — 첫 요청 시 재시도됨")
 
     grpc_server = create_server(cfg)
     grpc_server.start()

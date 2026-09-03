@@ -15,6 +15,11 @@ _BODY = json.dumps(
     ensure_ascii=False,
 ).encode("utf-8")
 
+_BENIGN_BODY = json.dumps(
+    {"messages": [{"role": "user", "content": "안녕하세요"}]},
+    ensure_ascii=False,
+).encode("utf-8")
+
 
 def test_log_event_appends_jsonl_line(tmp_path):
     p = tmp_path / "e.jsonl"
@@ -28,8 +33,16 @@ def test_log_event_appends_jsonl_line(tmp_path):
 
 
 def test_pipeline_emits_one_event(tmp_path):
-    cfg = load_config()  # autouse fixture 가 DLP_LOG_SINK=jsonl + DLP_LOG_PATH → tmp
-    pipeline.analyze("s1", "input", "POST", "/v1/chat/completions", {}, _BODY, config=cfg)
+    cfg = load_config()  # autouse fixture 가 DLP_LOG_PATH → tmp_path/events.jsonl
+    pipeline.analyze(
+        "s1",
+        "input",
+        "POST",
+        "/v1/chat/completions",
+        {},
+        _BENIGN_BODY,
+        config=cfg,
+    )
     lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     row = json.loads(lines[0])

@@ -13,7 +13,12 @@ gRPC 서버 · HTTP API · eval 스크립트가 모두 이 함수를 호출한�
       - ctx.risk_score >= cfg.risk.hard_block    → block (input 경로만)
     본문 변경은 ctx.turns[*].text 를 바꾸면 되고, 파이프라인이 adapter.rebuild 로 재조립한다.
 
-현재: 스테이지 목록이 비어 있어 실질 판정은 없다(항상 allow). 각 기능(a~h)이 자리에 stage 를 채운다.
+현재: [2] Input Guard, [3] PII 탐지(b), [4] 멀티턴 누적(e) 까지 배선됨.
+ctx.risk_score 는 이제 세션 누적 결과를 반영한다 (docs/spec/dlp-server/multiturn-context.md).
+[5] 목적+정책(f) 은 purpose 만 채우고, span_actions(변환 대상 결정)는 span 정보를 아직
+활용하지 않을 수 있음 — policy/engine.py 쪽에서 new_turn_spans 소비 여부 확인 필요.
+출력 경로: [3] Output Guard(c, 재스캔+인젝션 순응) → [2] detokenize(a) 순으로 배선됨.
+(재스캔이 detokenize 앞이어야 복원된 인가 PII 를 재마스킹하지 않는다 — output_check.py 참고.)
 
 근거: docs/architecture/dlp-server-architecture.md §3 (요청 파이프라인)
 """
@@ -24,14 +29,22 @@ import logging
 import time
 from collections.abc import Callable
 
+from app.transform.apply import mask_preview
+
 from .adapters import select_adapter
 from .config import Config, load_config
+from .context import (
+    multiturn_stage,  # [4] 멀티턴 누적 (e) — docs/spec/dlp-server/multiturn-context.md
+    remember_purpose_stage,  # 세션에 purpose 기록 — output detokenize_stage 가 조회
+)
+from .detect import pii_detect_stage
 from .guardrail.injection import injection_guard
 from .logging.events import LogEvent, log_event, write_pg
+from .guardrail.output_check import output_guard
 from .models import AnalysisContext, Decision, Turn
 from .policy.engine import purpose_policy_stage
 from .purpose.role_resolver import resolve as resolve_role
-from .transform.apply import apply_transforms, mask_preview
+from .transform.apply import detokenize_stage, transform_stage
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +52,26 @@ Stage = Callable[[AnalysisContext], AnalysisContext]
 
 # 순서 (docs/architecture/dlp-server-architecture.md §3.1)
 #   [2] Input Guard (c)      : ctx.injection 채움. hit 이면 ctx.blocked 도 세팅해 조기 종료
-#   [3] PII 탐지 (b)        : ctx.new_turn_spans  (detect.run(text) -> list[Span])
-#   [4] 멀티턴 누적 (e)     : ctx.accumulated / ctx.risk_score  (탐지 결과를 세션에 누적)
-#   [5] 목적+정책 (f)       : ctx.purpose / ctx.span_actions 채움. block action 이면 ctx.blocked
-#   [6] 변환+토큰화 (g, a)  : span_actions 를 ctx.turns[*].text 에 적용 (mask/redact/tokenize)
-# [3][4] 는 아직 미배선 — span 이 비어 있어 [5][6] 은 purpose 만 채우고 통과한다.
-_INPUT_STAGES: list[Stage] = [injection_guard, purpose_policy_stage, apply_transforms]
-# 출력: [2] detokenize (a) / [3] Output Guard (c)
-_OUTPUT_STAGES: list[Stage] = []
+#   [3] PII 탐지 (b)        : ctx.new_turn_spans — pii_detect_stage 가
+#                              app.detect.detect() 호출
+#   [4] 멀티턴 누적 (e)     : ctx.accumulated / ctx.risk_score
+#                              (탐지 결과를 세션에 누적) — multiturn_stage 로 배선됨
+#   [5] 목적+정책 (f)       : ctx.purpose / ctx.span_actions 채움.
+#                              block action 이면 ctx.blocked
+#         └ remember_purpose_stage : ctx.purpose 를 세션에 기록 (output 경로가 조회)
+#   [6] 변환+토큰화 (g, a)  : ctx.turns[*].text 갱신
+_INPUT_STAGES: list[Stage] = [
+    injection_guard,
+    pii_detect_stage,
+    multiturn_stage,
+    purpose_policy_stage,
+    remember_purpose_stage,
+    transform_stage,
+]
+# 출력: [3] Output Guard (c) 재스캔+인젝션 순응 → [2] detokenize (a) 인가 복원.
+#   재스캔은 detokenize 앞 — 라벨은 정규식에 안 걸리므로 모델이 새로 만든 PII 만 잡고,
+#   복원된 인가 PII 를 다시 마스킹하는 사고를 막는다.
+_OUTPUT_STAGES: list[Stage] = [output_guard, detokenize_stage]
 
 _config: Config | None = None
 

@@ -1,7 +1,7 @@
-# dlp-server 런타임 설정.
-# 값의 의미는 docs/architecture/dlp-server-architecture.md §9 참고.
+fail_action: block
+soft_budget_sec: 2.5
 
-fail_action: block        # block | allow — DLP 내부 예외 시 반환할 판정 (시연 안정용 스위치)
+fail_action: block        # block | allow — DLP 내부 예외 시 반환할 판정 (시연용 스위치)
 soft_budget_sec: 2.5      # 프록시 deadline 3s 대비 내부 처리 예산
 
 session_ttl_sec: 1800     # 세션 컨텍스트 TTL (초)
@@ -10,19 +10,28 @@ log_sink: pg              # pg | jsonl | both — 감사 로그 sink (DLP_LOG_SI
 log_path: log_events.jsonl  # JSONL sink / PG 폴백 경로 (DLP_LOG_PATH 로 오버라이드)
 
 db:
-  dsn: postgresql://dlp:dlp@localhost:5432/dlp  # DLP_DB_DSN 로 오버라이드
+  dsn: postgresql://dlp:dlp@localhost:5432/dlp
   pool_min: 1
   pool_max: 8
 
 purpose:
-  backend: rule           # rule | llm
+  backend: rule
   llm_timeout_sec: 1.5
 
 risk:
-  hard_block: 0.8         # 누적 위험도 임계값 — 초과 시 block
+  hard_block: 0.8
 
 guardrail:
-  injection_threshold: 0.7  # Input Guard hit 판정 임계 (DLP_GUARDRAIL__INJECTION_THRESHOLD)
+  injection_threshold: 0.7
+
+detect:
+  regex_min_confidence: 0.5
+  dict_min_confidence: 0.0
+  ner_threshold: 0.55                      # 실측 기준 임시값, eval로 튜닝 예정
+  ner_model_name: urchade/gliner_multi-v2.1
+  merge_overlap_bonus: 0.02
+  dictionary_path: ""
+  enabled_layers: ""
 
 grpc:
   host: 0.0.0.0
