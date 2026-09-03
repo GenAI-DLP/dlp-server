@@ -11,6 +11,10 @@ from app.config import load_config
 from app.models import AnalysisContext, InjectionVerdict
 
 _REQ = json.dumps(
+    {"model": "x", "messages": [{"role": "user", "content": "안녕하세요"}]},
+    ensure_ascii=False,
+).encode("utf-8")
+_PII_REQ = json.dumps(
     {"model": "x", "messages": [{"role": "user", "content": "홍길동 880101-1234567"}]},
     ensure_ascii=False,
 ).encode("utf-8")
@@ -45,7 +49,7 @@ def test_stage_modifying_turn_text_yields_transform(cfg, monkeypatch):
         return ctx
 
     monkeypatch.setattr("app.pipeline._INPUT_STAGES", [redact])
-    d = _analyze(cfg, "input", _REQ)
+    d = _analyze(cfg, "input", _PII_REQ)
     assert d.action == "transform"
     assert b"<PII:RRN:1>" in d.transformed_body
     assert b"880101-1234567" not in d.transformed_body

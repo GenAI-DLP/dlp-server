@@ -37,7 +37,7 @@ class AccumulatorConfig:
     # 0.6: NAME+RRN(0.25)+RRN+ACCOUNT(0.20)+NAME+RRN+ACCOUNT(0.35)=0.80 이 여기서 눌린다.
     # cfg.risk.hard_block(파이프라인 설정, 권장 0.6)과 짝을 맞춰야 한다 — 조합만으로
     # (반복·속도 없이) 로드맵 §9 Phase 2 대표 시나리오가 block 되도록 하기 위함.
-    combo_cap: float = 0.6
+    combo_cap: float = 0.8
     # 동일 엔티티 반복 언급 가중치 및 상한 (§3.3).
     repeat_weight: float = 0.05
     repeat_cap: float = 0.15
