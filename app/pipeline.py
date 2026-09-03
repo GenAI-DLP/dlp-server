@@ -39,8 +39,8 @@ from .context import (
 )
 from .detect import pii_detect_stage
 from .guardrail.injection import injection_guard
-from .logging.events import LogEvent, log_event, write_pg
 from .guardrail.output_check import output_guard
+from .logging.events import LogEvent, log_event, write_pg
 from .models import AnalysisContext, Decision, Turn
 from .policy.engine import purpose_policy_stage
 from .purpose.role_resolver import resolve as resolve_role
