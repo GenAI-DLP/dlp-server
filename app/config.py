@@ -91,6 +91,10 @@ class GrpcConfig(BaseModel):
 class ApiConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
+    # 대시보드가 별도 오리진(:8501)에서 브라우저로 호출하므로 CORS 허용 목록이 필요하다.
+    # 데모는 전체 허용, 운영은 좁힌다. env DLP_API__CORS_ORIGINS 는 JSON 배열 문자열:
+    #   DLP_API__CORS_ORIGINS='["http://localhost:8501"]'
+    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
 
 class Config(BaseSettings):
