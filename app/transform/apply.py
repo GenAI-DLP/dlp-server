@@ -125,9 +125,25 @@ def _render(action: str, ctx: AnalysisContext, span: Span) -> str:
 # ---------------------------------------------------------------------------
 # tokenize — vault 위임
 # ---------------------------------------------------------------------------
+def _access_scope(ctx: AnalysisContext) -> dict:
+    """토큰 복원 허용 범위 — 요청 role·목적 기준
+
+    vault.tokenize 에 안 넘기면 볼트 기본값 {"roles": [], "purposes": []} 로 저장돼
+    아무도 복원 못 하는 토큰이 된다. role/purpose 가 없으면 "*" 로 완화.
+    출력 경로 detokenize_stage 가 같은 role + get_last_purpose() 로 조회하므로
+    스코프가 맞아떨어진다. MVP이며 추후 확장 예정.
+    """
+    return {
+        "roles": [ctx.role] if ctx.role else ["*"],
+        "purposes": [ctx.purpose] if ctx.purpose else ["*"],
+    }
+
+
 def _tokenize(ctx: AnalysisContext, span: Span) -> str:
     try:
-        return vault.tokenize(ctx.session_id, span.type, span.value)
+        return vault.tokenize(
+            ctx.session_id, span.type, span.value, access_scope=_access_scope(ctx)
+        )
     except Exception:
         # tokenize 의 DB 오류는 vault.py 가 raise 하도록 설계돼 있음(fail-closed 원칙과
         # 별개로, 볼트 실패로 원본이 그대로 나가면 안 되니 redact 로 대체).
