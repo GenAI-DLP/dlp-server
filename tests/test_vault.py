@@ -55,7 +55,14 @@ def test_deterministic_reuse(db):
     a = vault.tokenize(_S1, "RRN", "880101-1234567", _WILDCARD)
     b = vault.tokenize(_S1, "RRN", "880101-1234567", _WILDCARD)
     assert a == b
-    assert _scalar(db, "SELECT count(*) FROM token_vault WHERE session_id = %s", _S1) == 1
+    assert (
+        _scalar(
+            db,
+            "SELECT count(*) FROM token_vault WHERE session_id = %s",
+            vault._session_uuid(_S1),
+        )
+        == 1
+    )
 
 
 def test_session_isolation(db):
@@ -219,10 +226,21 @@ def test_detokenize_text_restores_only_authorized(db):
 def test_concurrent_same_value_single_row(db):
     with ThreadPoolExecutor(max_workers=16) as ex:
         labels = list(
-            ex.map(lambda _: vault.tokenize(_S1, "RRN", "880101-1234567", _WILDCARD), range(100))
+            ex.map(
+                lambda _: vault.tokenize(_S1, "RRN", "880101-1234567", _WILDCARD),
+                range(100),
+            )
         )
+
     assert set(labels) == {"<PII:RRN:1>"}
-    assert _scalar(db, "SELECT count(*) FROM token_vault WHERE session_id = %s", _S1) == 1
+    assert (
+        _scalar(
+            db,
+            "SELECT count(*) FROM token_vault WHERE session_id = %s",
+            vault._session_uuid(_S1),
+        )
+        == 1
+    )
 
 
 def test_concurrent_distinct_values_unique_labels(db):
