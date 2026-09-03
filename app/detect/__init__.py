@@ -4,9 +4,9 @@ app/detect — 하이브리드 PII 탐지 orchestrator.
 pipeline.py 의 analyze() 가 이 모듈의 analyze_turn() 을 호출해
 AnalysisContext.new_turn_spans 를 채우는 그림을 가정한다.
 
-레이어 실행 순서: regex_rules -> dictionary -> (ner, 미구현) -> merge.
-ner.py 는 Phase 5(모델 선정 후) 구현 예정 — 아래 _LAYERS 에 함수만
-추가하면 자동으로 파이프라인에 편입되도록 설계했다.
+레이어 실행 순서: regex_rules -> dictionary -> ner -> merge.
+세 레이어 모두 구현 완료 (2026-09-03). ner.py 는 GLiNER 기반 제로샷 NER —
+모델/threshold 설정은 main.py 부트스트랩의 preload() 에서 주입한다.
 
 근거: spec/hybrid-pii-detection.md, docs/architecture/dlp-server-architecture.md §6
 """
@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from app.detect import dictionary, regex_rules
+from app.detect import dictionary, ner, regex_rules
 from app.detect.merge import merge_spans
 from app.models import AnalysisContext, Span
 
@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 # 레이어 이름 -> 탐지 함수. enabled_layers 필터링과 min_confidence 매핑(merge.py 의
 # source 값과 동일한 키)에 모두 이 이름을 쓴다.
-# ner.py 가 생기면 여기 한 줄만 추가하면 됨: "ner": ner.detect,
 _LAYER_FUNCS: dict[str, Callable[[str], list[Span]]] = {
     "regex": regex_rules.detect,
     "dict": dictionary.detect,
+    "ner": ner.detect,
 }
 
 
@@ -78,6 +78,10 @@ def detect(text: str) -> list[Span]:
     맞다고 판단해서, 레이어별로 예외를 격리한다 (예: 사전 파일이 깨져도
     regex 탐지는 계속 동작해야 함 — DLP_FAIL_ACTION=block 기본 정책과는
     별개로, 탐지 레이어 자체의 부분 장애가 전체를 죽이면 안 됨).
+
+    ner 레이어는 모델 워밍업(main.py preload())이 안 됐거나 실패한 경우
+    첫 호출에서 lazy-load를 시도한다 — 이 경우 해당 요청만 느려지고
+    실패해도 예외는 여기서 격리되어 나머지 레이어 결과는 살아남는다.
     """
     if not text:
         return []

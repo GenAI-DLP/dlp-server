@@ -60,20 +60,16 @@ class DetectConfig(BaseModel):
     근거: spec/hybrid-pii-detection.md §4
     """
 
-    # regex 레이어 결과 중 체크섬 실패 등으로 낮게 나온 값의 최소 통과 confidence.
-    # merge.py 의 DEFAULT_MIN_CONFIDENCE["regex"] 대체. env DLP_DETECT__REGEX_MIN_CONFIDENCE
     regex_min_confidence: float = 0.5
-    # dict 레이어는 boolean 성격이라 기본은 필터링 안 함 (0.0).
     dict_min_confidence: float = 0.0
-    # ner.py 미구현이라 지금은 안 쓰이지만, 붙을 때 merge threshold 로 바로 연결되게 미리 둠.
-    ner_threshold: float = 0.7
-    # 다중 레이어 합의 시 confidence 가산치. merge.py 의 OVERLAP_BONUS 대체.
+    # detect/ner.py 가 소비. merge.py 병합 시 이 threshold 미만인 NER span은 버려진다.
+    # 2026-09-03 실측(gliner_multi-v2.1) 기준 임시값 — eval/run_eval.py로 정식 튜닝 예정.
+    ner_threshold: float = 0.55
+    # GLiNER 모델 식별자. Apache 2.0 유지가 조건이라, 상용 전환 시에도
+    # gliner_ko(CC-BY-NC-4.0)로 바꾸지 말 것 — 대안은 아키텍처 문서 §12 참고.
+    ner_model_name: str = "urchade/gliner_multi-v2.1"
     merge_overlap_bonus: float = 0.02
-    # 사전 파일 경로. 빈 문자열이면 dictionary.py 의 내장 기본 경로
-    # (app/detect/dictionaries/financial_terms.txt) 를 그대로 쓴다.
     dictionary_path: str = ""
-    # 콤마 구분 레이어 이름 목록 (예: "regex,dict,ner"). 테스트/부분 배포 시
-    # 특정 레이어만 켜고 싶을 때 사용. 빈 문자열이면 구현된 레이어 전부 사용.
     enabled_layers: str = ""
 
 
