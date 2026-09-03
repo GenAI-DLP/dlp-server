@@ -44,7 +44,14 @@ class MultiturnConfig(BaseModel):
 
 
 class GuardrailConfig(BaseModel):
+    # Input Guard hit 판정 임계 (0~1). env DLP_GUARDRAIL__INJECTION_THRESHOLD
     injection_threshold: float = 0.7
+    # Output Guard — 응답 재스캔 재마스킹 최소 confidence.
+    # env DLP_GUARDRAIL__OUTPUT_PII_MIN_CONFIDENCE
+    output_pii_min_confidence: float = 0.5
+    # Output Guard 인젝션 순응(시스템 프롬프트/지시 노출) 검사 on/off.
+    # env DLP_GUARDRAIL__OUTPUT_INJECTION_CHECK
+    output_injection_check: bool = True
 
 
 class DetectConfig(BaseModel):

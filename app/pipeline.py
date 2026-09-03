@@ -17,7 +17,8 @@ gRPC 서버 · HTTP API · eval 스크립트가 모두 이 함수를 호출한�
 ctx.risk_score 는 이제 세션 누적 결과를 반영한다 (docs/spec/dlp-server/multiturn-context.md).
 [5] 목적+정책(f) 은 purpose 만 채우고, span_actions(변환 대상 결정)는 span 정보를 아직
 활용하지 않을 수 있음 — policy/engine.py 쪽에서 new_turn_spans 소비 여부 확인 필요.
-출력 경로: [2] detokenize(a) 배선됨 / [3] Output Guard(c) 는 별도 담당자 작업 중, 미배선.
+출력 경로: [3] Output Guard(c, 재스캔+인젝션 순응) → [2] detokenize(a) 순으로 배선됨.
+(재스캔이 detokenize 앞이어야 복원된 인가 PII 를 재마스킹하지 않는다 — output_check.py 참고.)
 
 근거: docs/architecture/dlp-server-architecture.md §3 (요청 파이프라인)
 """
@@ -38,6 +39,7 @@ from .context import (
 )
 from .detect import pii_detect_stage
 from .guardrail.injection import injection_guard
+from .guardrail.output_check import output_guard
 from .logging.events import LogEvent, log_event
 from .models import AnalysisContext, Decision, Turn
 from .policy.engine import purpose_policy_stage
@@ -66,8 +68,10 @@ _INPUT_STAGES: list[Stage] = [
     remember_purpose_stage,
     transform_stage,
 ]
-# 출력: [2] detokenize (a) — 배선됨 / [3] Output Guard (c) — 다른 담당자 작업 중, 미배선
-_OUTPUT_STAGES: list[Stage] = [detokenize_stage]
+# 출력: [3] Output Guard (c) 재스캔+인젝션 순응 → [2] detokenize (a) 인가 복원.
+#   재스캔은 detokenize 앞 — 라벨은 정규식에 안 걸리므로 모델이 새로 만든 PII 만 잡고,
+#   복원된 인가 PII 를 다시 마스킹하는 사고를 막는다.
+_OUTPUT_STAGES: list[Stage] = [output_guard, detokenize_stage]
 
 _config: Config | None = None
 
