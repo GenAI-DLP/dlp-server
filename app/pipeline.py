@@ -31,6 +31,7 @@ from .logging.events import LogEvent, log_event
 from .models import AnalysisContext, Decision, Turn
 from .policy.engine import purpose_policy_stage
 from .purpose.role_resolver import resolve as resolve_role
+from .transform.apply import apply_transforms, mask_preview
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,9 @@ Stage = Callable[[AnalysisContext], AnalysisContext]
 #   [3] PII 탐지 (b)        : ctx.new_turn_spans  (detect.run(text) -> list[Span])
 #   [4] 멀티턴 누적 (e)     : ctx.accumulated / ctx.risk_score  (탐지 결과를 세션에 누적)
 #   [5] 목적+정책 (f)       : ctx.purpose / ctx.span_actions 채움. block action 이면 ctx.blocked
-#   [6] 변환+토큰화 (g, a)  : ctx.turns[*].text 갱신
-# [3][4] 는 아직 미배선 — span 이 비어 있어 [5] 는 purpose 만 채우고 통과한다.
-_INPUT_STAGES: list[Stage] = [injection_guard, purpose_policy_stage]
+#   [6] 변환+토큰화 (g, a)  : span_actions 를 ctx.turns[*].text 에 적용 (mask/redact/tokenize)
+# [3][4] 는 아직 미배선 — span 이 비어 있어 [5][6] 은 purpose 만 채우고 통과한다.
+_INPUT_STAGES: list[Stage] = [injection_guard, purpose_policy_stage, apply_transforms]
 # 출력: [2] detokenize (a) / [3] Output Guard (c)
 _OUTPUT_STAGES: list[Stage] = []
 
@@ -143,12 +144,25 @@ def _block_check(ctx: AnalysisContext, cfg: Config, *, check_risk: bool) -> Deci
     return None
 
 
+def _transforms_summary(ctx: AnalysisContext) -> list[dict]:
+    """span별 조치 요약 (g). token_label 등 상세는 이후 확장."""
+    return [{"entity": s.type, "action": a} for s, a in ctx.span_actions if a != "keep"]
+
+
+def _entities_summary(ctx: AnalysisContext) -> list[dict]:
+    """탐지된 엔티티 요약 — 마스킹 미리보기만, 원문 금지 (b)."""
+    return [
+        {"type": s.type, "confidence": round(s.confidence, 4), "masked_preview": mask_preview(s)}
+        for s in ctx.new_turn_spans
+    ]
+
+
 def _reason(ctx: AnalysisContext, verdict: str, **extra: object) -> dict:
     reason: dict = {
         "verdict": verdict,
         "provider": ctx.provider,
-        "transforms": [],
-        "entities_summary": [],
+        "transforms": _transforms_summary(ctx),
+        "entities_summary": _entities_summary(ctx),
         "purpose": ctx.purpose,
         "risk_score": round(ctx.risk_score, 4),
         "guardrail_hits": [],
