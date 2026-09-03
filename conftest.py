@@ -7,8 +7,13 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _audit_log_to_tmp(tmp_path, monkeypatch):
-    """감사 로그를 테스트별 tmp 파일로 보내 repo 오염 방지."""
+    """감사 로그를 테스트별 tmp 파일로 보내 repo 오염 방지.
+
+    기본 sink 를 jsonl 로 고정한다 — DB 없는 테스트가 매번 PG 풀에 연결을 시도하지
+    않도록. PG sink 를 검증하는 테스트는 DLP_LOG_SINK=pg 로 직접 오버라이드한다.
+    """
     monkeypatch.setenv("DLP_LOG_PATH", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("DLP_LOG_SINK", "jsonl")
 
 
 # TRUNCATE 대상 — 운영/볼트/감사/정책. 조회 테이블(entity_type_ref, purpose_ref) 시드는 보존.

@@ -27,7 +27,7 @@ from collections.abc import Callable
 from .adapters import select_adapter
 from .config import Config, load_config
 from .guardrail.injection import injection_guard
-from .logging.events import LogEvent, log_event
+from .logging.events import LogEvent, log_event, write_pg
 from .models import AnalysisContext, Decision, Turn
 from .policy.engine import purpose_policy_stage
 from .purpose.role_resolver import resolve as resolve_role
@@ -118,9 +118,24 @@ def _emit_log(
         reason=r,
     )
     try:
-        log_event(event, cfg.log_path)
+        _write_event(event, cfg)
     except Exception:  # 로그 실패가 판정을 막지 않는다
         logger.exception("감사 로그 기록 실패")
+
+
+def _write_event(event: LogEvent, cfg: Config) -> None:
+    """cfg.log_sink 에 따라 감사 로그를 기록한다. pg 실패 시 JSONL 로 폴백."""
+    if cfg.log_sink == "jsonl":
+        log_event(event, cfg.log_path)
+        return
+    try:
+        write_pg(event)
+    except Exception:
+        logger.warning("log_events PG 기록 실패 — JSONL 폴백", exc_info=True)
+        log_event(event, cfg.log_path)
+        return
+    if cfg.log_sink == "both":
+        log_event(event, cfg.log_path)
 
 
 def _run_stages(ctx: AnalysisContext, stages: list[Stage]) -> AnalysisContext:
