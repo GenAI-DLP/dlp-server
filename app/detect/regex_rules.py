@@ -175,18 +175,35 @@ def _detect_account(text: str) -> list[Span]:
     ]
 
 
+def _spans_overlap(a: Span, b: Span) -> bool:
+    return a.start < b.end and b.start < a.end
+
+
 def detect(text: str) -> list[Span]:
     """텍스트에서 정규식+체크섬 기반 PII 후보를 모두 찾아 Span 리스트로 반환한다.
 
-    같은 타입 내 중복은 정규식 finditer 특성상 자연히 없지만,
-    타입 간 겹침(예: CARD 패턴이 ACCOUNT 패턴과 겹치는 구간)은
-    여기서 걸러내지 않고 그대로 반환한다 — 최종 정리는 merge.py 몫.
+    같은 타입 내 중복은 정규식 finditer 특성상 자연히 없다.
+
+    타입 간 겹침 처리 [수정]: ACCOUNT 패턴(\\d{2,6}-\\d{2,6}-\\d{2,6})이 가장 느슨해서
+    CARD(Luhn 체크섬 있음)나 PHONE(지역/이동통신 국번 제약 있음)과 자주 겹친다
+    (예: "010-1234-5678"이 PHONE 이면서 동시에 ACCOUNT 패턴에도 매치). 이전에는
+    걸러내지 않고 merge.py 로 넘겨서 confidence/탐지순서로 우연히 하나가 채택
+    됐는데, 어느 쪽이 이길지가 사실상 무작위라 실사용에서 오분류가 났다.
+    지금은 여기서 확정적으로 정리한다 — CARD/PHONE 이 ACCOUNT 보다 항상 우선
+    (더 구체적인 패턴이므로), 겹치는 ACCOUNT 후보는 아예 버린다.
     """
     spans: list[Span] = []
     spans += _detect_rrn(text)
-    spans += _detect_card(text)
+    card_spans = _detect_card(text)
+    spans += card_spans
     spans += _detect_bizno(text)
-    spans += _detect_phone(text)
+    phone_spans = _detect_phone(text)
+    spans += phone_spans
     spans += _detect_email(text)
-    spans += _detect_account(text)
+
+    higher_priority = card_spans + phone_spans
+    account_spans = [
+        s for s in _detect_account(text) if not any(_spans_overlap(s, hp) for hp in higher_priority)
+    ]
+    spans += account_spans
     return spans

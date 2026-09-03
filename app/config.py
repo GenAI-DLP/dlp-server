@@ -38,7 +38,7 @@ class RiskConfig(BaseModel):
 
 class MultiturnConfig(BaseModel):
     window_size_turns: int = 5
-    combo_cap: float = 0.6
+    combo_cap: float = 0.8
     repeat_weight: float = 0.05
     repeat_cap: float = 0.15
 

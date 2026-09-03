@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import re
+import uuid
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from psycopg import Connection
@@ -25,6 +26,29 @@ from app import db
 from app.config import load_config
 
 logger = logging.getLogger(__name__)
+
+# token_vault.session_id (및 token_vault_access_log.session_id) 는 DB 스키마상
+# UUID 타입이다(postgres-schema.sql — 이 파일에선 직접 안 보임, 실제 INSERT 시
+# psycopg.errors.InvalidTextRepresentation 으로 확인됨). 반면 실제 session_id 는
+# 프록시가 헤더/쿠키/원격주소에서 뽑은 임의 문자열이라(§2.3) UUID 형식이 보장
+# 안 된다. 문자열을 결정론적으로 UUID 로 매핑해 스키마 제약을 만족시킨다 —
+# 같은 session_id 문자열은 항상 같은 UUID 로 매핑되므로 조회/삽입 일관성은
+# 유지된다(uuid5 는 순수 함수, 매 호출 재계산해도 결과 동일 — 별도 캐시 불필요).
+#
+# ⚠️ 이 매핑은 이 모듈(vault.py) 안에서만 유효하다. 세션 컨텍스트 테이블
+# (sessions, session_entities — context/store.py 가 PostgreSQL 백엔드로 바뀔 때
+# 쓸 것으로 보이는 테이블, §7.3 미정)이나 로그 테이블도 session_id 를 UUID 로
+# 저장한다면 거기서도 이 함수와 동일한 네임스페이스·알고리즘을 써야 서로 대조
+# (JOIN 등)할 수 있다. 근본적으로는 스키마를 session_id TEXT 로 바꾸는 게 더
+# 간단한 해결책일 수 있다 — 스키마 담당자와 논의 필요, 여기서는 애플리케이션
+# 레벨 우회로만 처리한다.
+_SESSION_UUID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # 표준 URL 네임스페이스
+
+
+def _session_uuid(session_id: str) -> str:
+    """임의의 session_id 문자열 → 결정론적 UUID 문자열 (DB의 UUID 컬럼용)."""
+    return str(uuid.uuid5(_SESSION_UUID_NAMESPACE, session_id))
+
 
 # 정상 입력으로 인정하는 entity_type. 밖의 값은 "UNKNOWN" 으로 폴백한다.
 ENTITY_TYPES = frozenset(
@@ -69,17 +93,19 @@ def tokenize(
     vhash = _hash(session_id, etype, value)
     scope = access_scope if access_scope is not None else {"roles": [], "purposes": []}
     ttl_sec = load_config().vault_ttl_sec
+    db_session_id = _session_uuid(session_id)  # UUID 컬럼용 — advisory lock 키는 원본 문자열 유지
 
     with db.connection() as conn, conn.transaction():
         existing = conn.execute(
             "SELECT token_label FROM token_vault "
             "WHERE session_id = %s AND value_hash = %s AND revoked_at IS NULL",
-            (session_id, vhash),
+            (db_session_id, vhash),
         ).fetchone()
         if existing is not None:
             return existing[0]
 
         # 카운터 증가 구간만 직렬화 (xact lock — 트랜잭션 종료 시 해제).
+        # advisory lock 키는 DB 컬럼이 아니라 해시 입력일 뿐이라 원본 session_id 문자열 사용.
         conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"{session_id}|{etype}",),
@@ -87,7 +113,7 @@ def tokenize(
         # revoked 포함 count — 라벨 번호를 재사용하지 않아 옛 라벨의 오복원을 막는다.
         count = conn.execute(
             "SELECT count(*) FROM token_vault WHERE session_id = %s AND entity_type = %s",
-            (session_id, etype),
+            (db_session_id, etype),
         ).fetchone()[0]
         label = TOKEN_LABEL_FMT.format(etype=etype, n=count + 1)
 
@@ -98,7 +124,7 @@ def tokenize(
             "VALUES (%s, %s, %s, %s, %s, %s, now() + make_interval(secs => %s)) "
             "ON CONFLICT (session_id, value_hash) WHERE revoked_at IS NULL "
             "DO NOTHING RETURNING token_label",
-            (session_id, etype, label, _encrypt(value), vhash, Jsonb(scope), ttl_sec),
+            (db_session_id, etype, label, _encrypt(value), vhash, Jsonb(scope), ttl_sec),
         ).fetchone()
         if inserted is not None:
             return inserted[0]
@@ -107,7 +133,7 @@ def tokenize(
         existing = conn.execute(
             "SELECT token_label FROM token_vault "
             "WHERE session_id = %s AND value_hash = %s AND revoked_at IS NULL",
-            (session_id, vhash),
+            (db_session_id, vhash),
         ).fetchone()
         return existing[0]
 
@@ -130,7 +156,7 @@ def detokenize(
                     "(expires_at <= now()) AS is_expired "
                     "FROM token_vault "
                     "WHERE session_id = %s AND token_label = %s AND revoked_at IS NULL",
-                    (session_id, token_label),
+                    (_session_uuid(session_id), token_label),
                 )
                 row = cur.fetchone()
 
@@ -224,6 +250,32 @@ def purge_expired() -> None:
         logger.exception("purge_expired 실패")
 
 
+def revoke_session(session_id: str) -> None:
+    """특정 세션의 모든 미만료 볼트 레코드를 즉시 soft revoke 한다.
+
+    세션(§6-e, context/store.py)과 볼트(§7.2)는 원래 수명이 분리돼 있어
+    session_id 로의 FK 도 없고, vault_ttl_sec 이 지나야 자연 만료된다. 다만
+    session_ttl_sec 이 vault_ttl_sec 보다 짧게 설정되면 세션은 끝났는데
+    토큰은 한동안 더 살아있는 창(window)이 생긴다 — 최소 보관 원칙을 강화하려고
+    세션 만료를 "조기 정리" 트리거로 추가한 것이다. purge_expired() 의 정기
+    스케줄과 독립적으로 동작하며 서로 충돌하지 않는다(둘 다 revoked_at 만 세팅,
+    하드 삭제는 purge_expired() 의 유예 기간 로직에서만 일어남).
+
+    호출부(context/stage.py 의 InMemorySessionStore on_expire 훅)는 이 함수의
+    실패를 예외로 전파받지 않는다 — 여기서 이미 흡수해서 로깅만 한다. vault
+    정리 실패가 세션 만료 처리 자체를 막으면 안 되기 때문(최선 노력 정리).
+    """
+    try:
+        with db.connection() as conn, conn.transaction():
+            conn.execute(
+                "UPDATE token_vault SET revoked_at = now() "
+                "WHERE session_id = %s AND revoked_at IS NULL",
+                (_session_uuid(session_id),),
+            )
+    except Exception:
+        logger.exception("revoke_session 실패 — session=%s", session_id)
+
+
 def _reset() -> None:
     """테스트 전용 — 볼트·감사 테이블을 비운다."""
     with db.connection() as conn:
@@ -279,13 +331,26 @@ def _log_access(
     granted: bool,
     denied_reason: str | None,
 ) -> None:
-    """복원 시도 1건 기록. 원문·평문·value_hash 는 넣지 않는다. role 없으면 "" (NOT NULL)."""
+    """복원 시도 1건 기록. 원문·평문·value_hash 는 넣지 않는다. role 없으면 "" (NOT NULL).
+
+    token_vault_access_log.session_id 도 token_vault 와 같은 스키마 계열(UUID 타입)
+    이라고 가정하고 _session_uuid() 로 변환한다 — 실제 컬럼 타입이 다르면(예: TEXT)
+    이 변환은 불필요하니 스키마 확인 후 제거해도 된다.
+    """
     conn.execute(
         "INSERT INTO token_vault_access_log "
         "(token_id, session_id, token_label, requested_role, requested_purpose, "
         "granted, denied_reason) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-        (token_id, session_id, token_label, role or "", purpose, granted, denied_reason),
+        (
+            token_id,
+            _session_uuid(session_id),
+            token_label,
+            role or "",
+            purpose,
+            granted,
+            denied_reason,
+        ),
     )
 
 
