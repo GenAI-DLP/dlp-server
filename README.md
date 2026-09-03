@@ -166,7 +166,8 @@ curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down"
 | `DLP_FAIL_ACTION` | `block`(기본) \| `allow` — 내부 예외 시 반환할 판정 (시연 안정용) |
 | `DLP_GUARDRAIL__INJECTION_THRESHOLD` | Input Guard(기능 c 입력) hit 판정 임계 0~1 (기본 `0.7`). 매칭된 규칙 score 가 이 값 이상이면 `block` |
 | `DLP_GRPC__PORT` | gRPC 포트 (기본 `50051`) |
-| `DLP_LOG_PATH` | 감사 로그 JSONL 경로 |
+| `DLP_LOG_SINK` | 감사 로그 sink — `pg`(기본) \| `jsonl` \| `both`. `pg` 실패 시 JSONL 로 폴백 |
+| `DLP_LOG_PATH` | JSONL sink / PG 폴백 파일 경로 |
 | `DLP_CONFIG` | 설정 파일(yaml) 경로 |
 
 ## 테스트
@@ -175,7 +176,8 @@ curl http://localhost:8000/health      # {"status":"ok","db":"ok"}  ("db":"down"
 pytest -q
 ```
 
-`tests/test_db.py` · `tests/test_vault.py` 는 PostgreSQL 이 붙어 있을 때만 돈다 (없으면 skip).
+`tests/test_db.py` · `tests/test_vault.py` 와 `tests/test_events.py` 의 PG sink 테스트는
+PostgreSQL 이 붙어 있을 때만 돈다 (없으면 skip). 그 외 테스트는 `DLP_LOG_SINK=jsonl` 로 돈다.
 
 DB 포함해 돌리려면:
 
@@ -211,6 +213,8 @@ DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q
 | `app/models.py` | 계약 타입 (`Turn` / `Span` / `AnalysisContext` / `Decision`) |
 | `app/config.py`, `config.yaml` | 런타임 설정 |
 | `app/db.py` | PostgreSQL 커넥션 풀 (psycopg3). 볼트·정책·감사가 공유 |
+| `app/logging/events.py` | 감사 로그 sink — `log_events` INSERT, 실패 시 JSONL 폴백. 원문 무저장 |
+| `app/ids.py` | wire `session_id` → UUID 정규화 (저장 계층 공용) |
 | `app/grpc_server.py`, `app/api.py`, `app/main.py` | transport 어댑터 + 부트스트랩 |
 | `app/adapters/` | 본문 형식 파서 (gateway / openai / anthropic) |
 | `app/transform/vault.py` | 가역적 토큰화 (기능 a) — `token_vault` 레포지토리 + AES-GCM + 복원 인가 |
