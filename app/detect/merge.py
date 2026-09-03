@@ -29,9 +29,9 @@ MAX_CONFIDENCE = 0.999
 
 # 레이어별 최소 통과 confidence (이 미만은 병합 전에 드롭)
 DEFAULT_MIN_CONFIDENCE: dict[str, float] = {
-    "regex": 0.5,  # 체크섬 실패로 낮아진 regex 결과 등
-    "dict": 0.0,  # 사전 매치는 boolean 성격이라 기본적으로 필터링 안 함
-    "ner": 0.7,  # DLP_DETECT__NER_THRESHOLD 기본값과 동일
+    "regex": 0.5,   # 체크섬 실패로 낮아진 regex 결과 등
+    "dict": 0.0,    # 사전 매치는 boolean 성격이라 기본적으로 필터링 안 함
+    "ner": 0.7,     # DLP_DETECT__NER_THRESHOLD 기본값과 동일
 }
 
 
@@ -68,7 +68,7 @@ def _cluster_overlapping(spans: list[Span]) -> list[list[Span]]:
     return clusters
 
 
-def _resolve_cluster(cluster: list[Span]) -> Span:
+def _resolve_cluster(cluster: list[Span], *, overlap_bonus: float) -> Span:
     """겹치는 span 클러스터 하나를 최종 Span 하나로 합친다."""
     if len(cluster) == 1:
         return cluster[0]
@@ -103,7 +103,7 @@ def _resolve_cluster(cluster: list[Span]) -> Span:
 
     if len(distinct_sources) > 1:
         boosted_confidence = min(
-            canonical.confidence + OVERLAP_BONUS * (len(distinct_sources) - 1),
+            canonical.confidence + overlap_bonus * (len(distinct_sources) - 1),
             MAX_CONFIDENCE,
         )
         merged_source = "+".join(distinct_sources)
@@ -125,6 +125,7 @@ def merge_spans(
     spans: list[Span],
     *,
     min_confidence: dict[str, float] | None = None,
+    overlap_bonus: float | None = None,
 ) -> list[Span]:
     """세 레이어(regex/dict/ner)에서 나온 Span 리스트를 하나로 병합한다.
 
@@ -132,19 +133,23 @@ def merge_spans(
         spans: regex_rules.detect() + dictionary.detect() + ner.detect() 결과를
             한 리스트로 이어붙인 것. 순서는 무관.
         min_confidence: 소스별 최소 통과 confidence. 미지정 시
-            DEFAULT_MIN_CONFIDENCE 사용 (TODO: app/config.py 의
-            DLP_DETECT__* 값과 연동).
+            DEFAULT_MIN_CONFIDENCE 사용. app.config.Config.detect 에서 값을
+            받아오는 건 호출부(app/detect/__init__.py)의 책임 — merge.py 는
+            config 를 직접 모른다 (순수 함수로 유지해 테스트 용이성 확보).
+        overlap_bonus: 다중 레이어 합의 시 confidence 가산치. 미지정 시
+            모듈 상수 OVERLAP_BONUS 사용.
 
     Returns:
         구간이 겹치지 않도록 정리된 최종 Span 리스트. start 기준 정렬됨.
     """
     thresholds = min_confidence or DEFAULT_MIN_CONFIDENCE
+    bonus = OVERLAP_BONUS if overlap_bonus is None else overlap_bonus
 
     filtered = [s for s in spans if _passes_min_confidence(s, thresholds)]
     if not filtered:
         return []
 
     clusters = _cluster_overlapping(filtered)
-    merged = [_resolve_cluster(cluster) for cluster in clusters]
+    merged = [_resolve_cluster(cluster, overlap_bonus=bonus) for cluster in clusters]
 
     return sorted(merged, key=lambda s: s.start)

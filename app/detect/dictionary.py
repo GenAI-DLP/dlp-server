@@ -62,10 +62,7 @@ def load_dictionary(path: Path | str = DEFAULT_DICT_PATH) -> ahocorasick.Automat
             if len(term) < MIN_TERM_LENGTH:
                 logger.debug(
                     "dictionary: %s:%d '%s' 는 %d자 미만이라 스킵",
-                    path,
-                    lineno,
-                    term,
-                    MIN_TERM_LENGTH,
+                    path, lineno, term, MIN_TERM_LENGTH,
                 )
                 skipped += 1
                 continue
@@ -75,9 +72,7 @@ def load_dictionary(path: Path | str = DEFAULT_DICT_PATH) -> ahocorasick.Automat
             except ValueError:
                 logger.warning(
                     "dictionary: %s:%d confidence 파싱 실패 ('%s') — 스킵",
-                    path,
-                    lineno,
-                    confidence_str,
+                    path, lineno, confidence_str,
                 )
                 continue
 
@@ -96,8 +91,25 @@ _default_automaton: ahocorasick.Automaton | None = None
 def _get_default_automaton() -> ahocorasick.Automaton:
     global _default_automaton
     if _default_automaton is None:
-        _default_automaton = load_dictionary()
+        _default_automaton = load_dictionary(_resolve_default_path())
     return _default_automaton
+
+
+def _resolve_default_path() -> Path:
+    """config.detect.dictionary_path 가 설정돼 있으면 그걸, 아니면 내장 기본 경로.
+
+    config 로드가 실패해도(예: 일부 단위 테스트 환경) 기본 경로로 안전하게
+    폴백한다 — dictionary.py 는 config 의존을 필수로 만들지 않는다.
+    """
+    try:
+        from app.config import load_config
+
+        override = load_config().detect.dictionary_path
+        if override:
+            return Path(override)
+    except Exception:
+        logger.debug("dictionary: config 로드 실패 — 내장 기본 사전 경로 사용", exc_info=True)
+    return DEFAULT_DICT_PATH
 
 
 def detect(text: str, automaton: ahocorasick.Automaton | None = None) -> list[Span]:

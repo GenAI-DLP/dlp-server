@@ -24,35 +24,59 @@ from pydantic_settings import (
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("config.yaml")
 
-# load_config(path=...) 또는 DLP_CONFIG 로 지정된 yaml 경로.
-# settings_customise_sources() 가 이 값을 읽어 yaml 소스를 만든다.
 _yaml_path: Path = DEFAULT_CONFIG_PATH
 
 
 class PurposeConfig(BaseModel):
-    backend: str = "rule"  # rule | llm
+    backend: str = "rule"
     llm_timeout_sec: float = 1.5
 
 
 class RiskConfig(BaseModel):
-    hard_block: float = 0.8  # 누적 위험도 임계값 — 초과 시 block
+    hard_block: float = 0.6
+
+
+class MultiturnConfig(BaseModel):
+    window_size_turns: int = 5
+    combo_cap: float = 0.6
+    repeat_weight: float = 0.05
+    repeat_cap: float = 0.15
 
 
 class GuardrailConfig(BaseModel):
-    # Input Guard hit 판정 임계 (0~1). 매칭된 규칙 score 가 이 값 이상이면 block.
-    # env DLP_GUARDRAIL__INJECTION_THRESHOLD 로 오버라이드
     injection_threshold: float = 0.7
 
 
+class DetectConfig(BaseModel):
+    """하이브리드 PII 탐지(§6-b) 설정. app/detect/ 의 세 레이어 + merge 가 소비한다.
+
+    근거: spec/hybrid-pii-detection.md §4
+    """
+
+    # regex 레이어 결과 중 체크섬 실패 등으로 낮게 나온 값의 최소 통과 confidence.
+    # merge.py 의 DEFAULT_MIN_CONFIDENCE["regex"] 대체. env DLP_DETECT__REGEX_MIN_CONFIDENCE
+    regex_min_confidence: float = 0.5
+    # dict 레이어는 boolean 성격이라 기본은 필터링 안 함 (0.0).
+    dict_min_confidence: float = 0.0
+    # ner.py 미구현이라 지금은 안 쓰이지만, 붙을 때 merge threshold 로 바로 연결되게 미리 둠.
+    ner_threshold: float = 0.7
+    # 다중 레이어 합의 시 confidence 가산치. merge.py 의 OVERLAP_BONUS 대체.
+    merge_overlap_bonus: float = 0.02
+    # 사전 파일 경로. 빈 문자열이면 dictionary.py 의 내장 기본 경로
+    # (app/detect/dictionaries/financial_terms.txt) 를 그대로 쓴다.
+    dictionary_path: str = ""
+    # 콤마 구분 레이어 이름 목록 (예: "regex,dict,ner"). 테스트/부분 배포 시
+    # 특정 레이어만 켜고 싶을 때 사용. 빈 문자열이면 구현된 레이어 전부 사용.
+    enabled_layers: str = ""
+
+
 class DbConfig(BaseModel):
-    dsn: str = "postgresql://dlp:dlp@localhost:5432/dlp"  # DLP_DB__DSN 로 오버라이드
+    dsn: str = "postgresql://dlp:dlp@localhost:5432/dlp"
     pool_min: int = 1
     pool_max: int = 8
 
 
 class VaultConfig(BaseModel):
-    # 볼트 cipher_value 앱레벨 AES-GCM 키. base64 인코딩된 32바이트.
-    # env DLP_VAULT__KEY 로 주입.
     key: str = ""
 
 
@@ -75,19 +99,20 @@ class Config(BaseSettings):
         extra="ignore",
     )
 
-    # DLP 내부 예외 시 반환할 판정. 기본 block, 시연 안정용 allow 스위치.
-    fail_action: str = "block"  # block | allow  (DLP_FAIL_ACTION)
-    soft_budget_sec: float = 2.5  # 프록시 deadline 3s 대비 내부 예산
-    session_ttl_sec: int = 1800  # 세션 컨텍스트 TTL
-    vault_ttl_sec: int = 1800  # 토큰 볼트 TTL (세션과 수명 분리)
-    log_path: str = "log_events.jsonl"  # 감사 로그 JSONL sink 경로 (DLP_LOG_PATH)
+    fail_action: str = "block"
+    soft_budget_sec: float = 2.5
+    session_ttl_sec: int = 1800
+    vault_ttl_sec: int = 1800
+    log_path: str = "log_events.jsonl"
 
-    db: DbConfig = Field(default_factory=DbConfig)  # DLP_DB__DSN, DLP_DB__POOL_MIN ...
-    vault: VaultConfig = Field(default_factory=VaultConfig)  # DLP_VAULT__KEY
+    db: DbConfig = Field(default_factory=DbConfig)
+    vault: VaultConfig = Field(default_factory=VaultConfig)
     purpose: PurposeConfig = Field(default_factory=PurposeConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
-    guardrail: GuardrailConfig = Field(default_factory=GuardrailConfig)  # DLP_GUARDRAIL__*
-    grpc: GrpcConfig = Field(default_factory=GrpcConfig)  # DLP_GRPC__PORT ...
+    multiturn: MultiturnConfig = Field(default_factory=MultiturnConfig)
+    guardrail: GuardrailConfig = Field(default_factory=GuardrailConfig)
+    detect: DetectConfig = Field(default_factory=DetectConfig)
+    grpc: GrpcConfig = Field(default_factory=GrpcConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
 
     @classmethod
@@ -99,7 +124,6 @@ class Config(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """우선순위: init > 환경변수 > .env > config.yaml > secrets."""
         sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings, dotenv_settings]
         if _yaml_path.exists():
             sources.append(
@@ -112,11 +136,6 @@ class Config(BaseSettings):
 
 
 def load_config(path: str | Path | None = None) -> Config:
-    """설정을 로드한다.
-
-    path 를 주면 그 yaml 을, 아니면 DLP_CONFIG 또는 기본 config.yaml 을 base 로 하고
-    그 위에 환경변수 / .env 를 얹는다.
-    """
     global _yaml_path
     _yaml_path = Path(path or os.environ.get("DLP_CONFIG", DEFAULT_CONFIG_PATH))
 
