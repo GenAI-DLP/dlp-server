@@ -160,12 +160,25 @@ def _block_check(ctx: AnalysisContext, cfg: Config, *, check_risk: bool) -> Deci
     return None
 
 
+def _transforms_summary(ctx: AnalysisContext) -> list[dict]:
+    """span별 조치 요약 (g). token_label 등 상세는 이후 확장."""
+    return [{"entity": s.type, "action": a} for s, a in ctx.span_actions if a != "keep"]
+
+
+def _entities_summary(ctx: AnalysisContext) -> list[dict]:
+    """탐지된 엔티티 요약 — 마스킹 미리보기만, 원문 금지 (b)."""
+    return [
+        {"type": s.type, "confidence": round(s.confidence, 4), "masked_preview": mask_preview(s)}
+        for s in ctx.new_turn_spans
+    ]
+
+
 def _reason(ctx: AnalysisContext, verdict: str, **extra: object) -> dict:
     reason: dict = {
         "verdict": verdict,
         "provider": ctx.provider,
-        "transforms": [],
-        "entities_summary": [],
+        "transforms": _transforms_summary(ctx),
+        "entities_summary": _entities_summary(ctx),
         "purpose": ctx.purpose,
         "risk_score": round(ctx.risk_score, 4),
         "guardrail_hits": [],
