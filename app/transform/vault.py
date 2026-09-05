@@ -65,6 +65,9 @@ ENTITY_TYPES = frozenset(
         "BIZNO",
         "AMOUNT",
         "NAME",
+        "ADDRESS",
+        "ORG",
+        "PROJECT",
     }
 )
 
