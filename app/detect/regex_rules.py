@@ -19,15 +19,20 @@ import re
 from app.models import Span
 
 # ---- 패턴 정의 -------------------------------------------------------
+#
+# 끝 경계를 \b(단어 문자 경계) 대신 (?<!\d)/(?!\d)로 바꿨다.
+# 이유: 한글은 Python 정규식에서 \w로 취급되어, "880101-1234567입니다"처럼
+# 숫자 뒤에 조사/서술어가 공백 없이 바로 붙으면 숫자↔한글 사이에 \w-\w
+# 전환이라 \b가 경계로 인식하지 못해 매치 자체가 실패했다 (RRN/PHONE 둘 다
+# 실제 대화체 문장에서 재현됨). "숫자가 더 이어지지만 않으면 된다"는
+# 원래 의도만 남기고, 그 뒤에 한글이 오든 조사가 붙든 매치되게 한다.
 
-_RRN_PATTERN = re.compile(r"\b(\d{6})[-\s]?([1-4]\d{6})\b")
-_CARD_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
-_BIZNO_PATTERN = re.compile(r"\b(\d{3})[-\s]?(\d{2})[-\s]?(\d{5})\b")
-_PHONE_PATTERN = re.compile(r"\b(01[016789]|02|0[3-6]\d)[-\s]?\d{3,4}[-\s]?\d{4}\b")
+_RRN_PATTERN = re.compile(r"(?<!\d)(\d{6})[-\s]?([1-4]\d{6})(?!\d)")
+_CARD_PATTERN = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?<=\d)(?!\d)")
+_BIZNO_PATTERN = re.compile(r"(?<!\d)(\d{3})[-\s]?(\d{2})[-\s]?(\d{5})(?!\d)")
+_PHONE_PATTERN = re.compile(r"(?<!\d)(01[016789]|02|0[3-6]\d)[-\s]?\d{3,4}[-\s]?\d{4}(?!\d)")
 _EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
-# 계좌번호: 은행별 자릿수·구분자가 제각각이라 "숫자-숫자-숫자" 형태의
-# 10~14자리 조합을 느슨하게 매치. 체크섬 없음 → confidence 낮게.
-_ACCOUNT_PATTERN = re.compile(r"\b\d{2,6}-\d{2,6}-\d{2,6}\b")
+_ACCOUNT_PATTERN = re.compile(r"(?<!\d)\d{2,6}-\d{2,6}-\d{2,6}(?!\d)")
 
 # 체크섬 통과/실패 시 confidence
 _CHECKSUM_PASS_CONFIDENCE = 0.97
