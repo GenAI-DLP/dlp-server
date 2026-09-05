@@ -10,6 +10,11 @@ detokenize 앞 : 이 시점엔 <PII:..> 가 아직 라벨이라 정규식에 안
 
 오류 시 fail-closed(block) — 출력은 마지막 방어선이라 입력측(fail-open)과 다르다.
 
+[수정] 재스캔으로 찾은 span을 ctx.new_turn_spans / ctx.span_actions에도 기록한다.
+이전엔 텍스트만 바로 마스킹하고 span 정보를 어디에도 안 남겨서, pipeline._reason()이
+읽는 entities_summary/transforms가 output 경로에서는 항상 빈 배열로 나갔다 —
+즉 실제로 뭘 찾아서 마스킹했는지 판정 근거(reason)로 전혀 보이지 않는 구조였다.
+
 근거: docs/architecture/dlp-server-architecture.md §3.2 / §6-c
 """
 
@@ -20,13 +25,11 @@ import re
 
 from app.config import GuardrailConfig, load_config
 from app.detect import regex_rules
-from app.models import AnalysisContext
+from app.models import AnalysisContext, Span
 from app.transform.apply import mask_preview  # 원문 노출 없는 부분 마스킹 (apply.py 규칙 재사용)
 
 logger = logging.getLogger(__name__)
 
-# 응답이 시스템 프롬프트·내부 지시를 노출하는 패턴. 입력측(injection.py = "이전 지시 무시"
-# 요구)과 방향이 반대라 규칙을 공유하지 않는다. 얕게 시작 → red-team eval 후 정밀화.
 _RAW_OUTPUT_RULES: list[tuple[str, str]] = [
     (
         "system_prompt_leak.ko",
@@ -49,8 +52,6 @@ _RAW_OUTPUT_RULES: list[tuple[str, str]] = [
 ]
 _OUTPUT_RULES = [(name, re.compile(src, re.IGNORECASE)) for name, src in _RAW_OUTPUT_RULES]
 
-# 설정값은 프로세스당 1회 로드 후 재사용 (injection.py 의 _threshold_cache 선례).
-# 테스트는 _guardrail_cfg 를 None 으로 리셋해 초기화한다.
 _guardrail_cfg: GuardrailConfig | None = None
 
 
@@ -61,21 +62,37 @@ def _cfg() -> GuardrailConfig:
     return _guardrail_cfg
 
 
-def _rescan_and_mask(text: str, min_confidence: float) -> str:
-    """응답의 정형 PII 를 뒤→앞 순서로 재마스킹한다 (offset 안 밀리게)."""
-    spans = [s for s in regex_rules.detect(text) if s.confidence >= min_confidence]
+def _rescan_and_mask(text: str, min_confidence: float) -> tuple[str, list[Span]]:
+    all_spans = regex_rules.detect(text)
+    logger.info("output_guard: 재스캔 대상 텍스트(첫 200자) = %r", text[:200])
+    logger.info(
+        "output_guard: regex 재스캔 — 후보 %d개(%s), threshold=%.2f",
+        len(all_spans),
+        [(s.type, round(s.confidence, 3)) for s in all_spans],
+        min_confidence,
+    )
+
+    spans = [s for s in all_spans if s.confidence >= min_confidence]
+    if not spans:
+        return text, []
+
     for span in sorted(spans, key=lambda s: s.start, reverse=True):
         text = text[: span.start] + mask_preview(span) + text[span.end :]
-    return text
+
+    logger.info(
+        "output_guard: %d개 마스킹 적용 — %s",
+        len(spans),
+        [s.type for s in spans],
+    )
+    return text, spans
 
 
 def _injection_compliance(text: str) -> str | None:
-    """응답이 시스템 프롬프트/지시 노출 패턴이면 적중 규칙 이름을 반환. 아니면 None."""
     for name, pattern in _OUTPUT_RULES:
         try:
             if pattern.search(text):
                 return name
-        except Exception:  # 규칙 하나가 터져도 나머지는 계속 본다
+        except Exception:
             logger.exception("output injection 규칙 평가 실패: %s", name)
     return None
 
@@ -90,11 +107,18 @@ def output_guard(ctx: AnalysisContext) -> AnalysisContext:
         return ctx
     try:
         cfg = _cfg()
-        text = _rescan_and_mask(ctx.turns[0].text, cfg.output_pii_min_confidence)
+        text, spans = _rescan_and_mask(ctx.turns[0].text, cfg.output_pii_min_confidence)
+
+        # [수정] reason(_reason() → entities_summary/transforms)에 결과가 보이도록 기록.
+        # output 경로엔 policy 엔진이 없으므로 action은 항상 "mask"로 고정 표기한다
+        # (input 경로처럼 정책에 따라 달라지는 게 아니라, output_guard 자체가 결정하는 조치).
+        ctx.new_turn_spans = spans
+        ctx.span_actions = [(s, "mask") for s in spans]
 
         if cfg.output_injection_check:
             hit = _injection_compliance(text)
             if hit is not None:
+                logger.warning("output_guard: 인젝션 순응 탐지 — pattern=%s", hit)
                 ctx.blocked = True
                 ctx.block_reason = {
                     "type": "output_guard",
