@@ -43,7 +43,14 @@ class GatewayAdapter:
 
     def parse_response(self, body: bytes) -> str:
         data = json.loads(body or b"{}")
-        # 사내 Gateway 응답은 OpenAI chat.completions 형태를 가정
+        # 사내 Gateway 응답 포맷 — extract_turns/matches와 동일하게 messages 배열을 우선 본다.
+        messages = data.get("messages")
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                return str(last.get("content", ""))
+
+        # OpenAI chat.completions 형태(다른 provider 경유 등) 하위 호환
         choices = data.get("choices")
         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
             return str(choices[0].get("message", {}).get("content", ""))
@@ -53,6 +60,14 @@ class GatewayAdapter:
 
     def rebuild_response(self, body: bytes, text: str) -> bytes:
         data = json.loads(body or b"{}")
+        messages = data.get("messages")
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                last["content"] = text
+                data["messages"] = messages
+                return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
         choices = data.get("choices")
         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
             choices[0].setdefault("message", {})["content"] = text
