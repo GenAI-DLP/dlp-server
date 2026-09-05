@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from app.adapters.base import Adapter
 from app.adapters.gateway import GatewayAdapter
+from app.adapters.gemini import GeminiAdapter
 
 _GATEWAY = GatewayAdapter()
-_ADAPTERS: list[Adapter] = [_GATEWAY]
+_GEMINI = GeminiAdapter()
+_ADAPTERS: list[Adapter] = [_GEMINI, _GATEWAY]
 
 
 def select_adapter(
@@ -22,4 +24,4 @@ def select_adapter(
     return _GATEWAY
 
 
-__all__ = ["Adapter", "GatewayAdapter", "select_adapter"]
+__all__ = ["Adapter", "GatewayAdapter", "GeminiAdapter", "select_adapter"]
