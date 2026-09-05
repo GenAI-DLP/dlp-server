@@ -4,6 +4,8 @@ FastAPI 앱 — 얇은 어댑터.
 라우트:
     GET /health                 — 헬스체크 (DB 포함)
     GET /events                 — 감사 로그 최신순 조회 (대시보드 tail)
+    GET /events/stream          — 판정 즉시 push되는 SSE 라이브 tail (라우트 등록 순서상
+                                   /events/{session_id} 보다 먼저 와야 함)
     GET /events/{session_id}    — 세션 타임라인 (input→output)
     GET /stats                  — window 별 집계 (대시보드 KPI·차트)
     GET /vault-access           — 토큰 복원 시도 감사 조회
@@ -19,16 +21,24 @@ FastAPI 앱 — 얇은 어댑터.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import queue
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 
 from . import db
 from .config import Config, load_config
 from .ids import coerce_session_uuid
+from .logging.bus import bus
+from .logging.events import serialize_event
+
+_STREAM_HEARTBEAT_SEC = 15
 
 _DIRECTIONS = ("input", "output")
 _VERDICTS = ("allow", "block", "transform")
@@ -83,39 +93,6 @@ def _json_array_elems(col: str) -> str:
     )
 
 
-def _serialize_event(row: dict, *, include_reason: bool = False) -> dict:
-    """log_events 한 행 → 대시보드용 dict.
-
-    ``reason`` 의 ``risk_score`` / ``note`` / ``session_id_raw`` 를 top-level 로 끌어올려
-    대시보드가 reason 전체를 파싱하지 않아도 되게 한다. JSONB 컬럼은 psycopg3 가
-    dict/list 로 돌려주므로 그대로 싣는다.
-    """
-    reason = row.get("reason") or {}
-    out = {
-        "event_id": row["event_id"],
-        "session_id": str(row["session_id"]),
-        "session_id_raw": reason.get("session_id_raw"),
-        "direction": row["direction"],
-        "provider": row["provider"],
-        "purpose": row["purpose"],
-        "verdict_action": row["verdict_action"],
-        "transforms": row["transforms"] or [],
-        "entities_summary": row["entities_summary"] or [],
-        "guardrail_hits": row["guardrail_hits"] or [],
-        "fail_policy_applied": row["fail_policy_applied"],
-        "latency_ms": row["latency_ms"],
-        "risk_score": reason.get("risk_score"),
-        "note": reason.get("note"),
-        # TIMESTAMPTZ 는 서버 세션 tz 로 돌아온다 — 응답은 KST(+09:00)로 통일한다.
-        "created_at": (
-            row["created_at"].astimezone(_KST).isoformat() if row["created_at"] else None
-        ),
-    }
-    if include_reason:
-        out["reason"] = reason
-    return out
-
-
 def _fetch_events(where: list[str], params: list, *, order: str, limit: int | None) -> list[dict]:
     clause = (" WHERE " + " AND ".join(where)) if where else ""
     sql = f"SELECT {_EVENT_COLS} FROM log_events{clause} ORDER BY {order}"
@@ -126,6 +103,38 @@ def _fetch_events(where: list[str], params: list, *, order: str, limit: int | No
         cur = conn.cursor(row_factory=dict_row)
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+async def _event_stream(
+    direction: str | None,
+    verdict: str | None,
+    session_id: str | None,
+    is_disconnected,
+):
+    """``/events/stream`` 본체. ``is_disconnected`` 를 주입받아 실제 요청(Request.is_disconnected)
+    없이도 직접 구동해 테스트할 수 있게 한다 — TestClient(ASGI transport)는 앱이 끝날 때까지
+    기다렸다가 응답을 만들기 때문에, 자연 종료 없는 이 제너레이터를 HTTP 계층으로 테스트하면
+    데드락난다."""
+    q = bus.subscribe()
+    try:
+        yield ": connected\n\n"
+        while True:
+            if await is_disconnected():
+                break
+            try:
+                event = await asyncio.to_thread(q.get, timeout=_STREAM_HEARTBEAT_SEC)
+            except queue.Empty:
+                yield ": ping\n\n"
+                continue
+            if direction is not None and event["direction"] != direction:
+                continue
+            if verdict is not None and event["verdict_action"] != verdict:
+                continue
+            if session_id is not None and event["session_id"] != session_id:
+                continue
+            yield f"id: {event['event_id']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+    finally:
+        bus.unsubscribe(q)
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -188,7 +197,32 @@ def create_app(config: Config | None = None) -> FastAPI:
             order="created_at DESC, event_id DESC",
             limit=min(limit, _EVENTS_LIMIT_MAX),
         )
-        return [_serialize_event(r) for r in rows]
+        return [serialize_event(r) for r in rows]
+
+    # /events/{session_id} 보다 먼저 등록해야 한다 — 안 그러면 "stream"이 session_id로 매칭된다.
+    @app.get("/events/stream")
+    async def events_stream(
+        request: Request,
+        direction: str | None = Query(None),
+        verdict: str | None = Query(None),
+        session_id: str | None = Query(None),
+    ) -> StreamingResponse:
+        """판정 즉시 push되는 SSE 라이브 tail. 필터 의미는 ``/events`` 와 동일.
+
+        연결 끊긴 동안의 이벤트는 이 스트림에서만 유실된다 — ``log_events`` 에는
+        그대로 남아있어 ``/events``·``/events/{session_id}`` 로 조회 가능하다.
+        """
+        if direction is not None and direction not in _DIRECTIONS:
+            raise HTTPException(status_code=422, detail="direction 은 input|output")
+        if verdict is not None and verdict not in _VERDICTS:
+            raise HTTPException(status_code=422, detail="verdict 은 allow|block|transform")
+        norm_session_id = str(coerce_session_uuid(session_id)) if session_id is not None else None
+
+        return StreamingResponse(
+            _event_stream(direction, verdict, norm_session_id, request.is_disconnected),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/events/{session_id}")
     def session_timeline(session_id: str) -> list[dict]:
@@ -199,7 +233,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             order="created_at ASC, event_id ASC",
             limit=None,
         )
-        return [_serialize_event(r, include_reason=True) for r in rows]
+        return [serialize_event(r, include_reason=True) for r in rows]
 
     @app.get("/stats")
     def stats(window: str = Query("1h")) -> dict:
