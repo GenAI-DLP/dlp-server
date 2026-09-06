@@ -7,6 +7,7 @@ DLP_DB__DSN 환경변수를 사용한다 (apply_schema.py와 동일).
     python scripts/run_migrations.py                # 기본 경로: db/migrations
     python scripts/run_migrations.py --dir path/to/migrations
 """
+
 import argparse
 import glob
 import os
