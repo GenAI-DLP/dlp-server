@@ -12,7 +12,7 @@ import glob
 import os
 import sys
 
-import psycopg2
+import psycopg
 
 
 def main():
@@ -30,7 +30,7 @@ def main():
         print(f"[run_migrations] 적용할 파일 없음: {args.dir}")
         return
 
-    conn = psycopg2.connect(dsn)
+    conn = psycopg.connect(dsn)
     try:
         cur = conn.cursor()
         for path in files:
