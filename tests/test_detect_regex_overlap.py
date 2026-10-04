@@ -14,9 +14,9 @@ def test_phone_shaped_number_is_not_also_detected_as_account():
     spans = detect(text)
 
     types_at_phone_position = {s.type for s in spans if "010-1234-5678" in s.value}
-    assert types_at_phone_position == {"PHONE"}, (
-        f"010-1234-5678 은 PHONE 으로만 분류돼야 함, 실제: {types_at_phone_position}"
-    )
+    assert types_at_phone_position == {
+        "PHONE"
+    }, f"010-1234-5678 은 PHONE 으로만 분류돼야 함, 실제: {types_at_phone_position}"
 
 
 def test_card_number_wins_over_overlapping_account_pattern():
