@@ -37,6 +37,11 @@ grpc:
   host: 0.0.0.0
   port: 50051
 
+# api:
+#   host: 0.0.0.0
+#   port: 8000
 api:
   host: 0.0.0.0
   port: 8000
+  cors_origins:
+    - "*"
