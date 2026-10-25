@@ -134,7 +134,7 @@ risk_overrides:
 
 ## 🔍 설계하며 고민한 지점
 
-1. **Output Guard를 detokenize *앞*에 배치**
+1. **Output Guard를 detokenize 앞에 배치**
    - 재스캔 시점에는 PII가 아직 `<PII:..>` 라벨이라 정규식에 걸리지 않습니다.
    - 그래서 재스캔에는 "모델이 새로 만든 PII"만 잡히고, 권한 있는 사용자에게 복원된 원본을 다시 가려버리는 사고를 막습니다.
 2. **입력은 fail-open, 출력은 fail-closed 가드레일**
@@ -220,7 +220,9 @@ curl -N http://localhost:8000/events/stream    # SSE 실시간 판정 스트림
 python scripts/test_grpc_client.py             # gRPC Inspect 직접 호출
 ```
 
-> `python app/main.py`로 실행하면 `app/logging/` 패키지가 표준 라이브러리 `logging`을 가립니다. 반드시 `python -m app.main`으로 실행하세요.
+> `python app/main.py`로 실행하면 `app/logging/` 패키지가 표준 라이브러리 `logging`을 가립니다.
+> 
+>  반드시 `python -m app.main`으로 실행하세요.
 
 ### 5. 데모 데이터 시딩
 
@@ -276,15 +278,15 @@ docker run -p 50051:50051 -p 8000:8000 --env-file .env dlp-server
 
 ```bash
 pytest -q                                                              # DB 없으면 DB 테스트 skip
-DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q    # DB 포함
+DLP_DB__DSN=postgresql://dlp:dlp@localhost:5432/dlp_test pytest -q     # DB 포함
 ruff check . && ruff format --check .
 ```
 
-- 테스트 파일 28개 / 테스트 케이스 약 200개 — 탐지(정탐·오탐 표), 볼트 왕복·접근 범위, 정책 전 조합, 어댑터, 누적기, Output Guard, gRPC 인메모리 서버, SSE 스트림 등
+- 테스트 파일 28개 / 테스트 케이스 약 200개
+   - 탐지(정탐·오탐 표), 볼트 왕복·접근 범위, 정책 전 조합, 어댑터, 누적기, Output Guard, gRPC 인메모리 서버, SSE 스트림 등
 - GitHub Actions: PostgreSQL 16 서비스 컨테이너를 띄워 lint · format · test 전체 실행
 - `scripts/verify_detect_pipeline.py` + `eval/datasets/benign/`으로 정상 금융 대화의 오탐 여부 검증
-
-`make install | proto | db-apply | run | test | lint | fmt` 단축키도 제공합니다.
+- `make install | proto | db-apply | run | test | lint | fmt` 단축키도 제공합니다.
 
 
 ## 📁 프로젝트 폴더 구조
