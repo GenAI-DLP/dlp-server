@@ -38,7 +38,6 @@ dlp-server는 여기서 한 단계 더 나아가 다음 세 가지를 판단합�
 - dlp-server는 **외부 LLM을 직접 호출하지 않습니다.** 판단만 하고, 중계는 프록시가 합니다.
 - gRPC 계약은 [dlp-proto](https://github.com/GenAI-DLP/dlp-proto) 서브모듈로 프록시와 공유합니다.
 
----
 
 ## ✨ 구현한 기능
 
@@ -54,20 +53,61 @@ dlp-server는 여기서 한 단계 더 나아가 다음 세 가지를 판단합�
 본문 어댑터 → [Output Guard: 재스캔·인젝션 순응] → [detokenize: 인가된 경우만 복원] → 본문 재조립
 ```
 
-모든 스테이지는 `AnalysisContext`를 받아 갱신하고 돌려주는 동일한 시그니처(`Stage = Callable[[AnalysisContext], AnalysisContext]`)를 가집니다. 차단은 예외가 아니라 `ctx.blocked`로 표현하므로, 새 기능을 스테이지 하나로 끼워 넣을 수 있습니다.
+- 모든 스테이지는 `AnalysisContext`를 받아 갱신하고 돌려주는 동일한 시그니처(`Stage = Callable[[AnalysisContext], AnalysisContext]`)를 가집니다.
+- 차단은 예외가 아니라 `ctx.blocked`로 표현하므로, 새 기능을 스테이지 하나로 끼워 넣을 수 있습니다.
 
-| 기능 | 모듈 | 내용 |
-|---|---|---|
-| **a. 가역적 토큰화** | `transform/vault.py` | 같은 세션의 같은 값은 항상 같은 토큰(`<PII:RRN:1>`)으로 치환. 원본은 **AES-GCM**으로 암호화해 PostgreSQL `token_vault`에 저장. 복원 시 role·목적 기반 **접근 범위(access scope)** 검사, 모든 복원 시도를 `token_vault_access_log`에 기록. TTL 만료 시 soft revoke → 유예 후 파기 |
-| **b. 하이브리드 PII 탐지** | `detect/` | ① 정규식 + 체크섬(주민번호 mod-11, 카드 Luhn, 사업자번호 검증, 전화, 이메일, 계좌 문맥 가중) ② Aho-Corasick 사전(직원명·VIP·내부 용어) ③ **GLiNER 제로샷 NER**(이름·주소·조직·내부 프로젝트명·연체/대출잔액/신용등급). `merge.py`가 정규식 > 사전 > NER 우선순위로 겹치는 span을 병합 |
-| **c. 양방향 가드레일** | `guardrail/` | **Input Guard**: 한/영 프롬프트 인젝션·탈옥·반출 요청을 구(句) 단위 규칙으로 탐지, 적중 시 파이프라인 초입에서 즉시 block. **Output Guard**: 모델이 새로 만든 PII 재스캔·재마스킹, 시스템 프롬프트 노출 등 인젝션 순응 탐지 |
-| **e. 멀티턴 문맥 분석** | `context/` | 세션별로 엔티티를 **값 해시로만** 누적(평문 미보관). 엔티티 그래프 + 슬라이딩 윈도우(최근 5턴), 조합 가중(예: 주민번호+계좌 0.20 → +전화 0.35), 반복 언급·입력 속도 신호를 합산. 누적 위험도가 임계값을 넘으면 block |
-| **f. 목적 기반 접근 제어** | `purpose/`, `policy/` | 마지막 사용자 턴에서 업무 목적 분류(고객 응대·문서 요약·코딩·데이터 분석·이상거래 조사·unknown). `X-Corp-User-Role` 헤더로 role 해석. **(목적 × role × 엔티티 타입) → 조치** 를 엔티티 단위로 결정하는 ABAC 정책 엔진. 정책은 PostgreSQL에 **버전 관리** |
-| **g. 동적 데이터 변환** | `transform/apply.py` | `keep` / `mask` / `generalize` / `aggregate` / `tokenize` / `synthetic` / `redact` / `block` 8가지 전략. 같은 주민번호라도 문서 요약이면 토큰화, 데이터 분석이면 `<AGE:30대><SEX:여>`로 일반화, 코딩 지원이면 차단 |
-| **감사 로그 · 대시보드 API** | `logging/`, `api.py` | 모든 판정을 `log_events`에 기록(**원문 없이 마스킹 미리보기만**). 대시보드용 조회·집계 API와 **SSE 실시간 스트림** 제공 |
+
 
 ### 정책 예시 (`app/policy/policy.yaml`)
 
+| 기능 | 한 줄 요약 | 모듈 |
+|---|---|---|
+| a. 가역적 토큰화 | PII를 토큰으로 바꾸고, 권한 있는 사람에게만 원본 복원 | `transform/vault.py` |
+| b. 하이브리드 PII 탐지 | 정규식 + 사전 + NER 세 레이어를 병합 | `detect/` |
+| c. 양방향 가드레일 | 요청의 인젝션 차단, 응답의 PII·지시 노출 재검사 | `guardrail/` |
+| e. 멀티턴 문맥 분석 | 여러 턴에 나눠 입력한 PII를 누적해 위험도 산정 | `context/` |
+| f. 목적 기반 접근 제어 | 목적 × 직무 × PII 타입으로 조치 결정 | `purpose/`, `policy/` |
+| g. 동적 데이터 변환 | 결정된 조치를 8가지 전략으로 실행 | `transform/apply.py` |
+| 감사 로그 · 대시보드 API | 모든 판정을 원문 없이 기록, 실시간 조회 | `logging/`, `api.py` |
+ 
+#### a. 가역적 토큰화
+- 같은 세션의 같은 값은 항상 같은 토큰(`<PII:RRN:1>`)으로 치환합니다.
+- 원본은 **AES-GCM**으로 암호화해 PostgreSQL `token_vault`에 저장합니다.
+- 복원할 때 요청자의 role·목적이 **접근 범위(access scope)** 를 통과해야 하며, 모든 복원 시도는 `token_vault_access_log`에 남습니다.
+- TTL이 지나면 즉시 복원을 막고(soft revoke), 유예 기간 후 암호문을 파기합니다.
+#### b. 하이브리드 PII 탐지
+- **정규식 + 체크섬**: 주민번호(mod-11), 카드(Luhn), 사업자번호, 전화, 이메일, 계좌(문맥 가중)
+- **사전**: Aho-Corasick 다중 패턴 매칭으로 직원명·VIP·내부 용어 탐지
+- **NER**: GLiNER 제로샷으로 이름·주소·조직·내부 프로젝트명·연체/대출잔액/신용등급 탐지
+- 겹치는 구간은 `merge.py`가 **정규식 > 사전 > NER** 우선순위로 병합합니다.
+#### c. 양방향 가드레일
+- **Input Guard**: 한/영 프롬프트 인젝션·탈옥·반출 요청을 구(句) 단위 규칙으로 탐지하고, 적중하면 파이프라인 초입에서 즉시 차단합니다.
+- **Output Guard**: 모델이 새로 만든 PII를 재스캔해 마스킹하고, 시스템 프롬프트 노출 같은 인젝션 순응을 탐지합니다.
+#### e. 멀티턴 문맥 분석
+- 세션별로 엔티티를 **값 해시로만** 누적합니다. 평문은 보관하지 않습니다.
+- 엔티티 그래프와 슬라이딩 윈도우(최근 5턴)로 턴 사이의 연결을 추적합니다.
+- 위험도 = 조합 가중 + 반복 언급 + 입력 속도
+  - 예: 주민번호 + 계좌 `0.20` → 여기에 전화번호까지 `0.35`
+- 누적 위험도가 임계값을 넘으면 차단합니다.
+#### f. 목적 기반 접근 제어
+- 마지막 사용자 턴에서 업무 목적을 분류합니다: 고객 응대 · 문서 요약 · 코딩 · 데이터 분석 · 이상거래 조사 · unknown
+- `X-Corp-User-Role` 헤더로 요청자의 직무를 해석합니다.
+- **(목적 × role × 엔티티 타입) → 조치** 를 엔티티마다 따로 결정하는 ABAC 정책 엔진입니다.
+- 정책은 PostgreSQL에 **버전 단위로 관리**합니다.
+#### g. 동적 데이터 변환
+`keep` · `mask` · `generalize` · `aggregate` · `tokenize` · `synthetic` · `redact` · `block` 8가지 전략 중 정책이 고른 것을 실행합니다. 같은 주민번호라도 목적에 따라 결과가 달라집니다.
+ 
+| 목적 | 주민번호 `880101-2******` 처리 결과 |
+|---|---|
+| 문서 요약 | `<PII:RRN:1>` (토큰화, 응답에서 복원) |
+| 데이터 분석 | `<AGE:30대><SEX:여>` (일반화) |
+| 코딩 지원 | 요청 차단 |
+ 
+#### 감사 로그 · 대시보드 API
+- 모든 판정을 `log_events`에 기록합니다. **원문 없이 마스킹 미리보기만** 남깁니다.
+- 대시보드용 조회·집계 API와 **SSE 실시간 스트림**을 제공합니다.
+### 정책 예시 (`app/policy/policy.yaml`)
+ 
 ```yaml
 rules:
   - {purpose: doc_summarize,       role: "*",      entity: "*",    action: tokenize}
@@ -81,14 +121,15 @@ risk_overrides:
   - {when: "injection.hit",     action: block}
   - {when: "risk_score >= 0.8", action: block}
 ```
-
+ 
 ### 지원 본문 포맷 (어댑터)
-
+ 
 | 어댑터 | 포맷 | 상태 |
 |---|---|---|
 | `gateway` | 사내 AI Gateway `{"messages":[{role, content}]}` | ✅ |
 | `gemini` | Gemini 공식 API `contents` / `candidates` (요청·응답 스키마 모두) | ✅ |
 | `openai`, `anthropic` | 공식 API 포맷 | 🚧 예정 |
+
 
 
 ## 🔍 설계하며 고민한 지점
